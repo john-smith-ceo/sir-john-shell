@@ -1,0 +1,1107 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HACK.SYS // TRIPLE PANEL</title>
+<style>
+  /* ============================================================
+     БАЗОВЫЕ СТИЛИ
+     ============================================================ */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    background: #0a0a0a;
+    color: #00ff00;
+    font-family: "Courier New", Courier, monospace;
+    font-size: 13px;
+    overflow: hidden;               /* страница сама не скроллится — скроллятся окна */
+  }
+
+  /* Лёгкий эффект CRT-развёртки поверх всего (декоративный) */
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(0, 255, 0, 0.03) 0px,
+      rgba(0, 255, 0, 0.03) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+    z-index: 999;
+  }
+
+  /* ============================================================
+     МАКЕТ: 3 равные колонки на всю высоту, отступ 10px
+     ============================================================ */
+  .desktop {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 10px;
+    padding: 10px;
+    height: 100vh;
+  }
+
+  /* Третья колонка — два окна друг под другом.
+     Верхнее (Analytics) занимает столько, сколько нужно его содержимому,
+     но не больше 62% высоты; нижнее (bitstream) забирает весь остаток. */
+  .col-stack {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 10px;
+    min-height: 0;
+    min-width: 0;
+  }
+  .col-stack > .window:first-child { max-height: 62vh; }
+
+  /* ============================================================
+     ОКНО
+     ============================================================ */
+  .window {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;                   /* чтобы длинные строки не растягивали колонку */
+    min-height: 0;                  /* чтобы окно ужималось внутри grid-строки       */
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 0 20px rgba(0, 255, 0, 0.05);
+  }
+
+  .titlebar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    background: #222;
+    border-bottom: 1px solid #333;
+    flex: 0 0 auto;
+    user-select: none;
+  }
+
+  /* Декоративные «кнопки» окна (macOS-стиль) */
+  .dots { display: flex; gap: 6px; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .dot.red    { background: #ff5f56; }
+  .dot.yellow { background: #ffbd2e; }
+  .dot.green  { background: #27c93f; }
+
+  .title {
+    flex: 1;
+    text-align: center;
+    color: #c0c0c0;
+    font-size: 12px;
+    letter-spacing: 1px;
+  }
+
+  /* Кнопка закрытия справа — тоже декоративная */
+  .close-btn {
+    color: #777;
+    font-size: 14px;
+    line-height: 1;
+    cursor: default;
+  }
+  .close-btn:hover { color: #ff5f56; }
+
+  /* Тело окна: единственный скроллируемый контейнер */
+  .body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 10px;
+    word-break: break-all;
+    line-height: 1.5;
+  }
+
+  /* pre-wrap нужен только там, где важны отступы и пробелы (код, терминал, логи).
+     На всём .body его ставить нельзя: переводы строк из самой разметки
+     превратились бы в пустые строки и «раздули» окно аналитики. */
+  #code, #terminal, #logs { white-space: pre-wrap; }
+
+  /* Тонкий «хакерский» скроллбар */
+  .body::-webkit-scrollbar { width: 8px; }
+  .body::-webkit-scrollbar-track { background: #111; }
+  .body::-webkit-scrollbar-thumb { background: #2a4a2a; border-radius: 4px; }
+  .body::-webkit-scrollbar-thumb:hover { background: #3a6a3a; }
+
+  /* Мигающий курсор (используется в окне кода и в терминале) */
+  .cursor {
+    display: inline-block;
+    width: 8px;
+    background: #00ff00;
+    animation: blink 1s steps(1) infinite;
+  }
+  @keyframes blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+
+  /* ============================================================
+     ОКНО 1 — подсветка синтаксиса Go
+     ============================================================ */
+  .kw   { color: #ff79c6; }  /* ключевые слова: func, var, for ... */
+  .typ  { color: #8be9fd; }  /* типы: int, string, error ...       */
+  .str  { color: #f1fa8c; }  /* строковые литералы                 */
+  .num  { color: #bd93f9; }  /* числа                              */
+  .com  { color: #6272a4; }  /* комментарии                        */
+  .fn   { color: #50fa7b; }  /* имена функций / пакетов            */
+  .pun  { color: #999; }     /* скобки и знаки препинания          */
+
+  #code { color: #00ff00; }
+
+  /* ============================================================
+     ОКНО 2 — терминал
+     ============================================================ */
+  #terminal .cmd    { color: #888; }              /* строка «> generating...» */
+  #terminal .prefix { color: #00ffff; font-weight: bold; } /* API_KEY: и т.п.  */
+  #terminal .val    { color: #00ff00; }           /* сам «секрет»             */
+  #terminal .ok     { color: #27c93f; }
+  #terminal .line   { margin-bottom: 2px; }
+
+  /* ============================================================
+     ОКНО 3 — аналитика
+     ============================================================ */
+  .section-title {
+    color: #666;
+    font-size: 11px;
+    letter-spacing: 2px;
+    margin: 8px 0 5px;
+    border-bottom: 1px dashed #333;
+    padding-bottom: 3px;
+  }
+  .section-title:first-child { margin-top: 0; }
+
+  table.metrics { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.metrics td { padding: 2px 0; vertical-align: middle; }
+  table.metrics td.name  { color: #c0c0c0; width: 74px; }
+  table.metrics td.value { text-align: right; width: 62px; font-weight: bold; }
+
+  /* Горизонтальный «столбик» метрики */
+  .bar-track {
+    height: 8px;
+    background: #262626;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%;
+    width: 0;
+    border-radius: 2px;
+    transition: width .6s ease, background-color .6s ease;
+  }
+  .lvl-ok   { background: #27c93f; }  /* зелёный  */
+  .lvl-warn { background: #ffbd2e; }  /* жёлтый   */
+  .lvl-crit { background: #ff5f56; }  /* красный  */
+
+  .c-ok   { color: #27c93f; }
+  .c-warn { color: #ffbd2e; }
+  .c-crit { color: #ff5f56; }
+
+  /* Вертикальная гистограмма истории нагрузки */
+  .histogram {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 44px;
+    background: #141414;
+    border: 1px solid #2a2a2a;
+    border-radius: 3px;
+    padding: 4px;
+  }
+  .histogram .col {
+    flex: 1;
+    background: #27c93f;
+    border-radius: 1px 1px 0 0;
+    min-height: 2px;
+    transition: height .5s ease, background-color .5s ease;
+  }
+
+  /* Индикаторы-«светофоры» состояния сервисов */
+  .status-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 10px;
+    font-size: 11px;
+  }
+  .status-item { display: flex; align-items: center; gap: 6px; color: #999; }
+  .led {
+    width: 8px; height: 8px; border-radius: 50%;
+    flex: 0 0 auto;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  .led.lvl-ok   { box-shadow: 0 0 6px #27c93f; }
+  .led.lvl-warn { box-shadow: 0 0 6px #ffbd2e; }
+  .led.lvl-crit { box-shadow: 0 0 6px #ff5f56; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+
+  /* Тело окна аналитики — колонка: верхние блоки фиксированы,
+     прокручивается только список логов внизу */
+  #analytics-body { display: flex; flex-direction: column; overflow-y: auto; }
+  #analytics-body .fixed-part { flex: 0 0 auto; }
+
+  /* Лог-строки с уровнями */
+  #logs {
+    font-size: 11px;
+    line-height: 1.45;
+    flex: 1 1 auto;
+    min-height: 60px;
+    overflow-y: auto;
+  }
+  #logs::-webkit-scrollbar { width: 8px; }
+  #logs::-webkit-scrollbar-track { background: #111; }
+  #logs::-webkit-scrollbar-thumb { background: #2a4a2a; border-radius: 4px; }
+  #logs .log-line { margin-bottom: 1px; }
+  #logs .ts    { color: #555; }
+  #logs .INFO  { color: #27c93f; }
+  #logs .WARN  { color: #ffbd2e; }
+  #logs .ERROR { color: #ff5f56; }
+  #logs .msg   { color: #a0a0a0; }
+
+  /* ============================================================
+     ОКНО 4 — двоичное развёртывание хеша
+     ============================================================ */
+  #binary-body {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  /* Верхняя строка состояния: какой именно хеш сейчас разворачивается */
+  #bin-status {
+    flex: 0 0 auto;
+    padding: 6px 10px;
+    font-size: 10px;
+    letter-spacing: 1px;
+    color: #666;
+    background: #151515;
+    border-bottom: 1px solid #2a2a2a;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #bin-status .hl { color: #00ffff; }
+
+  /* Само поле битов: заполняет всё оставшееся пространство */
+  #bin-stream {
+    flex: 1 1 auto;
+    overflow-y: auto;               /* прокручивается кодом, полосу прячем ниже */
+    padding: 6px 8px;
+    font-size: 11px;
+    line-height: 1.15;
+    letter-spacing: 0.5px;
+    white-space: pre;
+  }
+  #bin-stream::-webkit-scrollbar { width: 0; height: 0; }
+  #bin-stream .b1 { color: #00ff66; }             /* единицы — яркие  */
+  #bin-stream .b0 { color: #14512c; }             /* нули — приглушённые */
+  #bin-stream .blk { color: #445; }               /* разделитель блоков  */
+  #bin-stream .caret {
+    display: inline-block;
+    width: 7px;
+    background: #00ff66;
+    animation: blink .6s steps(1) infinite;
+  }
+
+  /* На узких экранах колонки складываются в столбик */
+  @media (max-width: 900px) {
+    html, body { overflow: auto; }
+    .desktop { grid-template-columns: 1fr; height: auto; }
+    .col-stack { grid-template-rows: auto auto; }
+    .window { height: 70vh; }
+  }
+</style>
+</head>
+<body>
+
+<div class="desktop">
+
+  <!-- ================= ОКНО 1: main.go ================= -->
+  <section class="window">
+    <header class="titlebar">
+      <div class="dots">
+        <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+      </div>
+      <span class="title">main.go</span>
+      <span class="close-btn">&#10005;</span>
+    </header>
+    <div class="body" id="code"></div>
+  </section>
+
+  <!-- ================= ОКНО 2: Terminal ================= -->
+  <section class="window">
+    <header class="titlebar">
+      <div class="dots">
+        <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+      </div>
+      <span class="title">Terminal</span>
+      <span class="close-btn">&#10005;</span>
+    </header>
+    <div class="body" id="terminal"></div>
+  </section>
+
+  <!-- ====== ПРАВАЯ КОЛОНКА: два окна друг под другом ====== -->
+  <div class="col-stack">
+
+  <!-- ================= ОКНО 3: Analytics ================= -->
+  <section class="window">
+    <header class="titlebar">
+      <div class="dots">
+        <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+      </div>
+      <span class="title">Analytics</span>
+      <span class="close-btn">&#10005;</span>
+    </header>
+    <div class="body" id="analytics-body">
+      <div class="fixed-part">
+        <div class="section-title">SYSTEM METRICS</div>
+        <table class="metrics"><tbody id="metrics"></tbody></table>
+
+        <div class="section-title">LOAD HISTORY</div>
+        <div class="histogram" id="histogram"></div>
+
+        <div class="section-title">SERVICES</div>
+        <div class="status-grid" id="services"></div>
+
+        <div class="section-title">EVENT LOG</div>
+      </div>
+      <div id="logs"></div>
+    </div>
+  </section>
+
+  <!-- ================= ОКНО 4: bitstream ================= -->
+  <section class="window">
+    <header class="titlebar">
+      <div class="dots">
+        <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+      </div>
+      <span class="title">bitstream</span>
+      <span class="close-btn">&#10005;</span>
+    </header>
+    <div class="body" id="binary-body">
+      <div id="bin-status"></div>
+      <div id="bin-stream"></div>
+    </div>
+  </section>
+
+  </div><!-- /col-stack -->
+
+</div>
+
+<script>
+/* ==================================================================
+   ОБЩИЕ УТИЛИТЫ
+   ================================================================== */
+
+/** Случайное целое в диапазоне [min, max] включительно. */
+const randInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+
+/** Случайный элемент массива. */
+const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+
+/** Экранирование HTML — обязательно, т.к. текст вставляется через innerHTML. */
+function esc(s) {
+  return s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+
+/**
+ * Держит контейнер прокрученным вниз (эффект «терминала»).
+ * Если пользователь сам отмотал наверх — не мешаем ему читать.
+ */
+function autoScroll(el) {
+  const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+  if (nearBottom) el.scrollTop = el.scrollHeight;
+}
+
+/**
+ * Ограничивает количество узлов в контейнере, чтобы за часы работы
+ * страница не съела всю память. Удаляем самые старые сверху.
+ */
+function trim(el, maxNodes) {
+  while (el.childNodes.length > maxNodes) el.removeChild(el.firstChild);
+}
+
+
+/* ==================================================================
+   ОКНО 1 — main.go: бесконечная печать Go-кода с подсветкой
+   ==================================================================
+   Как работает анимация:
+   1. Есть очередь строк `codeQueue`. Сначала туда кладётся «шапка»
+      файла (package/import/func main), затем очередь бесконечно
+      пополняется случайно сгенерированными фрагментами.
+   2. Таймер `typeCodeChar` печатает по одному символу текущей строки.
+      Когда строка закончилась — она подсвечивается и «фиксируется»,
+      берётся следующая из очереди.
+   3. Подсветка делается регуляркой по уже готовой строке.
+*/
+
+const codeEl = document.getElementById('code');
+
+// Ключевые слова и типы Go для подсветки
+const GO_KEYWORDS = ['package','import','func','var','const','type','struct','interface',
+  'return','if','else','for','range','go','defer','chan','select','switch','case',
+  'default','break','continue','map','nil','true','false','make','new','len','cap','append'];
+const GO_TYPES = ['int','int64','int32','uint8','float64','string','bool','byte','rune','error','any'];
+
+/**
+ * Подсветка синтаксиса Go.
+ * Идём одной «объединённой» регуляркой, чтобы приоритет был правильным:
+ * сначала комментарии, потом строки, потом числа, потом слова.
+ */
+function highlightGo(line) {
+  const kwRe = GO_KEYWORDS.join('|');
+  const tyRe = GO_TYPES.join('|');
+  const re = new RegExp(
+    '(//[^\\n]*)' +                    // 1: комментарий
+    '|("(?:[^"\\\\]|\\\\.)*")' +       // 2: строка в двойных кавычках
+    '|(`[^`]*`)' +                     // 3: raw-строка в бэктиках
+    '|\\b(\\d+(?:\\.\\d+)?)\\b' +      // 4: число
+    '|\\b(' + kwRe + ')\\b' +          // 5: ключевое слово
+    '|\\b(' + tyRe + ')\\b' +          // 6: тип
+    '|\\b([A-Za-z_]\\w*)(?=\\s*\\()' + // 7: идентификатор перед "(" = вызов функции
+    '|([{}()\\[\\];,.])',              // 8: пунктуация
+    'g'
+  );
+
+  let out = '', last = 0, m;
+  while ((m = re.exec(line)) !== null) {
+    out += esc(line.slice(last, m.index));           // обычный текст до совпадения
+    const cls = m[1] ? 'com' : m[2] || m[3] ? 'str' : m[4] ? 'num'
+              : m[5] ? 'kw'  : m[6] ? 'typ' : m[7] ? 'fn' : 'pun';
+    out += '<span class="' + cls + '">' + esc(m[0]) + '</span>';
+    last = re.lastIndex;
+  }
+  out += esc(line.slice(last));
+  return out;
+}
+
+// «Шапка» файла — печатается один раз в начале
+const CODE_HEADER = [
+  'package main',
+  '',
+  'import (',
+  '\t"crypto/sha256"',
+  '\t"fmt"',
+  '\t"math/rand"',
+  '\t"sync"',
+  '\t"time"',
+  ')',
+  '',
+  '// injectPayload — точка входа демона сбора телеметрии',
+  'func main() {',
+  '\tfmt.Println("[boot] node online")',
+  '\trand.Seed(time.Now().UnixNano())',
+  '}',
+  ''
+];
+
+// Словари для генерации «правдоподобного» кода
+const VARS   = ['buf','ctx','node','hash','conn','payload','token','seed','pool','chunk','sig','mask','delta','frame'];
+const FUNCS  = ['scanPorts','decodeFrame','rotateKey','flushBuffer','probeHost','signBlock','deriveSeed','mergeShards'];
+const PKGS   = ['fmt','rand','sha256','time','sync'];
+const STRS   = ['handshake ok','node %d synced','packet dropped','key rotated','tunnel established',
+                'checksum mismatch','peer %s joined','flush complete'];
+const NOTES  = ['проверяем контрольную сумму','повторная попытка через backoff','эта ветка греется на проде',
+                'TODO: вынести в отдельный воркер','lock-free очередь, не трогать','рекурсию тут нельзя — стек'];
+
+/** Генерирует случайный, синтаксически осмысленный фрагмент Go-кода (массив строк). */
+function makeCodeChunk() {
+  const v  = pick(VARS), v2 = pick(VARS), f = pick(FUNCS);
+
+  const templates = [
+    // Простое присваивание
+    () => ['\t' + v + ' := ' + randInt(1, 9999)],
+
+    // Вызов печати
+    () => ['\tfmt.Println("' + pick(STRS) + '", ' + v + ')'],
+
+    // Комментарий
+    () => ['\t// ' + pick(NOTES)],
+
+    // Объявление переменной с типом
+    () => ['\tvar ' + v + ' ' + pick(GO_TYPES) + ' = ' + (Math.random() < .5 ? randInt(0, 512) : '"' + pick(STRS) + '"')],
+
+    // Цикл for
+    () => [
+      '\tfor i := 0; i < ' + randInt(4, 64) + '; i++ {',
+      '\t\t' + v + ' = ' + v + ' ^ (i << ' + randInt(1, 7) + ')',
+      '\t}'
+    ],
+
+    // Range по слайсу
+    () => [
+      '\tfor i, b := range ' + v + ' {',
+      '\t\t' + v2 + '[i] = b + byte(' + randInt(1, 255) + ')',
+      '\t}'
+    ],
+
+    // Проверка ошибки
+    () => [
+      '\tif err := ' + f + '(' + v + '); err != nil {',
+      '\t\treturn fmt.Errorf("' + f + ': %w", err)',
+      '\t}'
+    ],
+
+    // Целая функция
+    () => [
+      '',
+      '// ' + f + ' — ' + pick(NOTES),
+      'func ' + f + '(' + v + ' []byte) (' + pick(GO_TYPES) + ', error) {',
+      '\th := sha256.Sum256(' + v + ')',
+      '\tif len(h) == 0 {',
+      '\t\treturn nil, fmt.Errorf("empty digest")',
+      '\t}',
+      '\treturn h[:' + randInt(4, 32) + '], nil',
+      '}',
+      ''
+    ],
+
+    // Горутина с WaitGroup
+    () => [
+      '\tvar wg sync.WaitGroup',
+      '\tfor n := 0; n < ' + randInt(2, 16) + '; n++ {',
+      '\t\twg.Add(1)',
+      '\t\tgo func(n int) {',
+      '\t\t\tdefer wg.Done()',
+      '\t\t\t' + f + '(' + v + ')',
+      '\t\t}(n)',
+      '\t}',
+      '\twg.Wait()'
+    ],
+
+    // Работа с каналом
+    () => [
+      '\tch := make(chan ' + pick(GO_TYPES) + ', ' + randInt(1, 128) + ')',
+      '\tselect {',
+      '\tcase ' + v + ' = <-ch:',
+      '\t\t' + pick(PKGS) + '.Println("recv", ' + v + ')',
+      '\tcase <-time.After(' + randInt(50, 900) + ' * time.Millisecond):',
+      '\t\t' + pick(PKGS) + '.Println("timeout")',
+      '\t}'
+    ],
+
+    // Структура
+    () => [
+      '',
+      'type ' + f.charAt(0).toUpperCase() + f.slice(1) + ' struct {',
+      '\tID    int',
+      '\tName  string',
+      '\tFlags uint8',
+      '}',
+      ''
+    ],
+
+    // Map
+    () => [
+      '\t' + v + ' := map[string]int{',
+      '\t\t"' + pick(VARS) + '": ' + randInt(1, 999) + ',',
+      '\t\t"' + pick(VARS) + '": ' + randInt(1, 999) + ',',
+      '\t}'
+    ]
+  ];
+
+  return pick(templates)();
+}
+
+// Очередь строк на печать; стартуем с «шапки» файла
+let codeQueue = CODE_HEADER.slice();
+let currentLine = '';   // строка, которая печатается прямо сейчас
+let charIndex = 0;      // позиция символа внутри currentLine
+
+// Контейнер для уже напечатанных строк + активная строка с курсором
+const doneEl = document.createElement('div');
+const liveEl = document.createElement('div');
+codeEl.appendChild(doneEl);
+codeEl.appendChild(liveEl);
+
+/** Один «тик» печати: добавляет очередной символ активной строки. */
+function typeCodeChar() {
+  // Если активной строки нет — берём следующую из очереди
+  if (currentLine === null) {
+    if (codeQueue.length === 0) codeQueue = codeQueue.concat(makeCodeChunk()); // очередь бесконечная
+    currentLine = codeQueue.shift();
+    charIndex = 0;
+  }
+
+  charIndex++;
+  const partial = currentLine.slice(0, charIndex);
+  liveEl.innerHTML = highlightGo(partial) + '<span class="cursor">&nbsp;</span>';
+
+  if (charIndex >= currentLine.length) {
+    // Строка допечатана — фиксируем её и переходим к следующей
+    const row = document.createElement('div');
+    row.innerHTML = highlightGo(currentLine) || '&nbsp;';
+    doneEl.appendChild(row);
+    trim(doneEl, 400);      // не даём DOM расти бесконечно
+    liveEl.innerHTML = '<span class="cursor">&nbsp;</span>';
+    currentLine = null;
+
+    // Небольшая пауза в конце строки — так печать выглядит живее
+    setTimeout(typeCodeChar, randInt(90, 260));
+  } else {
+    setTimeout(typeCodeChar, randInt(12, 45)); // скорость посимвольной печати
+  }
+  autoScroll(codeEl);
+}
+
+currentLine = null;
+typeCodeChar();
+
+
+/* ==================================================================
+   ОКНО 2 — Terminal: поток случайных ключей/токенов/хешей
+   ==================================================================
+   Как работает анимация:
+   1. Каждые ~2–3 секунды запускается цикл: сначала печатается служебная
+      строка "> generating token...", затем — сама секретная строка,
+      посимвольно, чтобы был эффект «печатной машинки».
+   2. Формат значения зависит от префикса: hex для HASH, base64 для
+      TOKEN, UUID для SESSION и т.д.
+*/
+
+const termEl = document.getElementById('terminal');
+
+const HEX    = '0123456789abcdef';
+const B64    = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+const ALNUM  = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+const SYMS   = ALNUM + '-_.~!$%&';
+
+/** Случайная строка длины len из указанного алфавита. */
+function randStr(len, alphabet) {
+  let s = '';
+  for (let i = 0; i < len; i++) s += alphabet[Math.floor(Math.random() * alphabet.length)];
+  return s;
+}
+
+/** UUID v4-подобная строка. */
+function uuid() {
+  const h = n => randStr(n, HEX);
+  return h(8) + '-' + h(4) + '-4' + h(3) + '-' + pick(['8','9','a','b']) + h(3) + '-' + h(12);
+}
+
+// Типы «секретов»: префикс, генератор значения и подпись действия
+const SECRET_TYPES = [
+  { prefix: 'API_KEY',  gen: () => 'sk_live_' + randStr(randInt(32, 48), ALNUM),      action: 'generating api key' },
+  { prefix: 'SECRET',   gen: () => randStr(randInt(40, 64), SYMS),                    action: 'deriving secret'    },
+  { prefix: 'TOKEN',    gen: () => randStr(randInt(36, 60), B64) + '==',              action: 'generating token'   },
+  { prefix: 'HASH',     gen: () => randStr(64, HEX),                                  action: 'computing sha-256'  },
+  { prefix: 'AUTH',     gen: () => 'Bearer ' + randStr(randInt(32, 44), B64),         action: 'signing request'    },
+  { prefix: 'SESSION',  gen: () => uuid(),                                            action: 'opening session'    },
+  { prefix: 'PRIVKEY',  gen: () => randStr(randInt(44, 56), B64),                     action: 'unwrapping key'     },
+  { prefix: 'NONCE',    gen: () => randStr(32, HEX),                                  action: 'rolling nonce'      },
+  { prefix: 'CHECKSUM', gen: () => randStr(40, HEX),                                  action: 'verifying blob'     }
+];
+
+/** Добавляет в терминал уже готовую строку (без эффекта печати). */
+function termLine(html) {
+  const div = document.createElement('div');
+  div.className = 'line';
+  div.innerHTML = html;
+  termEl.appendChild(div);
+  trim(termEl, 300);
+  autoScroll(termEl);
+  return div;
+}
+
+/**
+ * Печатает текст в существующий элемент посимвольно.
+ * `prefixHtml` выводится сразу, `text` — по буквам. По завершении зовёт done().
+ */
+function typeInto(el, prefixHtml, text, speed, done) {
+  let i = 0;
+  (function step() {
+    i++;
+    el.innerHTML = prefixHtml +
+      '<span class="val">' + esc(text.slice(0, i)) + '</span>' +
+      (i < text.length ? '<span class="cursor">&nbsp;</span>' : '');
+    autoScroll(termEl);
+    if (i < text.length) setTimeout(step, speed);
+    else if (done) done();
+  })();
+}
+
+// Сколько циклов подряд не выпадал HASH. Нужно, чтобы окно bitstream
+// получало новый хеш регулярно, а не раз в полминуты по воле рандома.
+let cyclesSinceHash = 0;
+const HASH_TYPE = SECRET_TYPES.find(t => t.prefix === 'HASH');
+
+/** Один полный цикл терминала: команда -> печать секрета -> подтверждение -> пауза. */
+function terminalCycle() {
+  // Каждый 4-й цикл принудительно выдаём HASH, остальные — случайный тип
+  const type = cyclesSinceHash >= 3 ? HASH_TYPE : pick(SECRET_TYPES);
+  cyclesSinceHash = type.prefix === 'HASH' ? 0 : cyclesSinceHash + 1;
+
+  // 1. Служебная строка-«команда»
+  termLine('<span class="cmd">&gt; ' + esc(type.action) + '...</span>');
+
+  // 2. Сама секретная строка, печатается посимвольно
+  setTimeout(() => {
+    const line = termLine('');
+    const value = type.gen();
+    typeInto(
+      line,
+      '<span class="prefix">' + type.prefix + ':</span> ',
+      value,
+      12,
+      () => {
+        // 3. Подтверждение выполнения
+        setTimeout(() => {
+          termLine('<span class="ok">  [ok]</span> <span class="cmd">' +
+            value.length + ' bytes &middot; entropy ' + randInt(180, 256) + ' bits</span>');
+
+          // 3b. Если это был HASH — отдаём его в окно bitstream на развёртку
+          if (type.prefix === 'HASH') startBinary(value);
+          // 4. Пауза 2–3 секунды и следующий цикл
+          setTimeout(terminalCycle, randInt(2000, 3000));
+        }, 200);
+      }
+    );
+  }, 350);
+}
+
+termLine('<span class="cmd">&gt; keygen daemon v2.4.1 &mdash; ready</span>');
+setTimeout(terminalCycle, 600);
+
+
+/* ==================================================================
+   ОКНО 3 — Analytics: метрики, гистограмма, индикаторы, логи
+   ==================================================================
+   Как работает анимация:
+   Раз в 3 секунды `updateAnalytics()` слегка сдвигает каждую метрику
+   (случайное блуждание в разумных границах), перерисовывает полоски,
+   двигает гистограмму на один столбик влево и добавляет 1–3 записи в лог.
+*/
+
+const metricsEl   = document.getElementById('metrics');
+const histogramEl = document.getElementById('histogram');
+const servicesEl  = document.getElementById('services');
+const logsEl      = document.getElementById('logs');
+
+// Описание метрик: текущее значение, границы, шаг дрейфа и пороги «жёлтый/красный»
+const METRICS = [
+  { name: 'CPU',      value: 42,   min: 5,   max: 99,    step: 12,  unit: '%',    warn: 70,   crit: 88,  scaleMax: 100  },
+  { name: 'MEMORY',   value: 61,   min: 20,  max: 97,    step: 7,   unit: '%',    warn: 75,   crit: 90,  scaleMax: 100  },
+  { name: 'REQUESTS', value: 1240, min: 100, max: 9800,  step: 900, unit: '/s',   warn: 6000, crit: 8500, scaleMax: 10000 },
+  { name: 'NETWORK',  value: 340,  min: 10,  max: 980,   step: 160, unit: 'MB/s', warn: 650,  crit: 850, scaleMax: 1000 },
+  { name: 'LATENCY',  value: 48,   min: 4,   max: 620,   step: 60,  unit: 'ms',   warn: 200,  crit: 400, scaleMax: 620  },
+  { name: 'THREADS',  value: 128,  min: 8,   max: 1024,  step: 90,  unit: '',     warn: 600,  crit: 850, scaleMax: 1024 }
+];
+
+const SERVICES = ['auth-svc','db-master','db-replica','cache','gateway','worker-pool','queue','cdn-edge'];
+
+// История нагрузки для гистограммы (40 столбиков)
+const HIST_BARS = 40;
+const history = Array.from({ length: HIST_BARS }, () => randInt(15, 70));
+
+/** Возвращает css-класс уровня по значению и порогам. */
+const levelOf = (v, m) => v >= m.crit ? 'lvl-crit' : v >= m.warn ? 'lvl-warn' : 'lvl-ok';
+
+/** Разовое построение DOM для метрик, индикаторов и гистограммы. */
+function buildAnalytics() {
+  // Строки таблицы метрик
+  METRICS.forEach((m, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td class="name">' + m.name + '</td>' +
+      '<td><div class="bar-track"><div class="bar-fill" id="bar' + i + '"></div></div></td>' +
+      '<td class="value" id="val' + i + '"></td>';
+    metricsEl.appendChild(tr);
+  });
+
+  // Столбики гистограммы
+  history.forEach(() => {
+    const col = document.createElement('div');
+    col.className = 'col';
+    histogramEl.appendChild(col);
+  });
+
+  // Индикаторы сервисов
+  SERVICES.forEach((s, i) => {
+    const item = document.createElement('div');
+    item.className = 'status-item';
+    item.innerHTML = '<span class="led lvl-ok" id="led' + i + '"></span>' + s;
+    servicesEl.appendChild(item);
+  });
+}
+
+/** Форматирование числа: тысячи с разделителем. */
+const fmt = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+
+/** Обновление метрик, гистограммы и индикаторов. */
+function updateAnalytics() {
+  METRICS.forEach((m, i) => {
+    // Случайное блуждание: сдвиг в пределах ±step, зажатый в [min, max]
+    const drift = randInt(-m.step, m.step);
+    m.value = Math.max(m.min, Math.min(m.max, m.value + drift));
+
+    const lvl = levelOf(m.value, m);
+    const bar = document.getElementById('bar' + i);
+    const val = document.getElementById('val' + i);
+    bar.style.width = Math.round(m.value / m.scaleMax * 100) + '%';
+    bar.className = 'bar-fill ' + lvl;
+    val.textContent = fmt(m.value) + m.unit;
+    val.className = 'value ' + ({ 'lvl-ok': 'c-ok', 'lvl-warn': 'c-warn', 'lvl-crit': 'c-crit' })[lvl];
+  });
+
+  // Гистограмма: сдвигаем историю влево и добавляем текущий CPU
+  history.shift();
+  history.push(METRICS[0].value);
+  const cols = histogramEl.children;
+  for (let i = 0; i < cols.length; i++) {
+    const v = history[i];
+    cols[i].style.height = Math.max(2, v) + '%';
+    cols[i].className = 'col ' + (v >= 88 ? 'lvl-crit' : v >= 70 ? 'lvl-warn' : 'lvl-ok');
+  }
+
+  // Индикаторы сервисов: в основном зелёные, изредка жёлтые/красные
+  SERVICES.forEach((_, i) => {
+    const r = Math.random();
+    const lvl = r > 0.94 ? 'lvl-crit' : r > 0.82 ? 'lvl-warn' : 'lvl-ok';
+    document.getElementById('led' + i).className = 'led ' + lvl;
+  });
+}
+
+// Заготовки сообщений для лога по уровням
+const LOG_MSGS = {
+  INFO: [
+    'heartbeat ok, {n} peers alive',
+    'cache warm, hit ratio {n}%',
+    'batch {n} committed to shard-{s}',
+    'tls handshake with {ip} complete',
+    'gc cycle finished in {n}ms',
+    'index rebuilt: {n} documents',
+    'replica lag {n}ms — within slo'
+  ],
+  WARN: [
+    'retry #{n} for upstream {ip}',
+    'connection pool at {n}% capacity',
+    'slow query detected: {n}ms',
+    'disk usage on shard-{s} at {n}%',
+    'rate limit approaching for key ...{h}',
+    'queue depth {n}, backpressure engaged'
+  ],
+  ERROR: [
+    'timeout talking to {ip} after {n}ms',
+    'checksum mismatch on shard-{s}',
+    'auth rejected for token ...{h}',
+    'write failed, {n} records dropped',
+    'node {ip} unreachable — evicting',
+    'panic recovered in worker-{s}'
+  ]
+};
+
+/** Подставляет случайные значения в шаблон сообщения. */
+function renderMsg(tpl) {
+  return tpl
+    .replace('{n}',  randInt(2, 4800))
+    .replace('{s}',  randInt(0, 15))
+    .replace('{ip}', randInt(10, 250) + '.' + randInt(0, 255) + '.' + randInt(0, 255) + '.' + randInt(1, 254))
+    .replace('{h}',  randStr(6, HEX));
+}
+
+/** Текущее время в формате HH:MM:SS. */
+function nowTime() {
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+
+/** Добавляет одну строку в лог. Уровень выбирается по вероятности: 70/22/8. */
+function pushLog() {
+  const r = Math.random();
+  const level = r < 0.70 ? 'INFO' : r < 0.92 ? 'WARN' : 'ERROR';
+
+  const div = document.createElement('div');
+  div.className = 'log-line';
+  div.innerHTML =
+    '<span class="ts">' + nowTime() + '</span> ' +
+    '<span class="' + level + '">[' + level.padEnd(5) + ']</span> ' +
+    '<span class="msg">' + esc(renderMsg(pick(LOG_MSGS[level]))) + '</span>';
+
+  logsEl.appendChild(div);
+  trim(logsEl, 200);
+
+  // Прокручиваем список логов вниз (он единственный скроллится в этом окне)
+  autoScroll(logsEl);
+}
+
+// Инициализация окна аналитики
+buildAnalytics();
+updateAnalytics();
+for (let i = 0; i < 6; i++) pushLog();          // немного строк на старте
+
+setInterval(updateAnalytics, 3000);             // метрики — раз в 3 секунды
+setInterval(() => {                             // логи — чуть чаще и пачками
+  const n = randInt(1, 3);
+  for (let i = 0; i < n; i++) setTimeout(pushLog, i * 300);
+}, 1800);
+
+
+/* ==================================================================
+   ОКНО 4 — bitstream: двоичное развёртывание хеша из окна Terminal
+   ==================================================================
+   Как работает анимация:
+   1. Как только в Terminal допечатался очередной HASH, вызывается
+      startBinary(hash): окно очищается, хеш переводится в биты
+      (каждый hex-символ -> 4 бита, 64 символа -> 256 бит).
+   2. Цикл на requestAnimationFrame печатает биты пачками по ~22 штуки
+      за кадр (примерно 1300 символов в секунду) — символ за символом,
+      но очень быстро.
+   3. Когда 256 бит закончились, поток не останавливается: биты
+      циклически сдвигаются, счётчик блока увеличивается, вставляется
+      строка-разделитель, и печать продолжается — так окно постоянно
+      заполнено до прихода следующего хеша.
+   4. Ширина строки считается по реальной ширине символа, поэтому биты
+      заполняют всё пространство окна без переносов посреди байта.
+*/
+
+const binStatusEl = document.getElementById('bin-status');
+const binStreamEl = document.getElementById('bin-stream');
+
+// Контейнер готовых строк + активная (печатающаяся) строка
+const binDone = document.createElement('div');
+const binLive = document.createElement('div');
+binStreamEl.appendChild(binDone);
+binStreamEl.appendChild(binLive);
+
+/** hex-строка -> строка из нулей и единиц (по 4 бита на символ). */
+function hexToBits(hex) {
+  let out = '';
+  for (const ch of hex) {
+    const v = parseInt(ch, 16);
+    // На всякий случай: не-hex символ разворачиваем в 8 бит его кода
+    out += Number.isNaN(v) ? ch.charCodeAt(0).toString(2).padStart(8, '0')
+                           : v.toString(2).padStart(4, '0');
+  }
+  return out;
+}
+
+/**
+ * Раскрашивает биты, склеивая подряд идущие одинаковые символы в один span.
+ * Так на строку из ~100 бит приходится ~50 узлов, а не 100.
+ */
+function colorizeBits(s) {
+  let out = '', i = 0;
+  while (i < s.length) {
+    const c = s[i];
+    let j = i;
+    while (j < s.length && s[j] === c) j++;
+    out += '<span class="' + (c === '1' ? 'b1' : 'b0') + '">' + s.slice(i, j) + '</span>';
+    i = j;
+  }
+  return out;
+}
+
+/** Сколько символов помещается в строку по текущей ширине окна. */
+let binCols = 64;
+function measureBinCols() {
+  const probe = document.createElement('span');
+  probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre';
+  probe.textContent = '0'.repeat(50);
+  binStreamEl.appendChild(probe);
+  const charW = probe.getBoundingClientRect().width / 50;
+  binStreamEl.removeChild(probe);
+  // 16 — горизонтальные padding'и контейнера
+  binCols = Math.max(16, Math.floor((binStreamEl.clientWidth - 16) / charW));
+}
+
+/** Сколько строк влезает по высоте — по ним же и подрезаем DOM. */
+function binVisibleRows() {
+  const lineH = parseFloat(getComputedStyle(binStreamEl).fontSize) * 1.15;
+  return Math.max(10, Math.ceil(binStreamEl.clientHeight / lineH));
+}
+
+// Текущее состояние потока
+let binState = null;
+
+/** Запуск развёртки нового хеша: полный сброс окна. */
+function startBinary(hash) {
+  measureBinCols();
+  binDone.innerHTML = '';
+  binLive.innerHTML = '';
+
+  binState = {
+    hash: hash,
+    bits: hexToBits(hash),   // 256 бит для sha-256
+    pos: 0,                  // позиция внутри bits
+    round: 0,                // сколько раз прошли эти 256 бит
+    block: 0,                // номер блока (ROUNDS_PER_BLOCK проходов)
+    line: ''                 // накапливаемая активная строка
+  };
+
+  binStatusEl.innerHTML =
+    'EXPANDING <span class="hl">' + esc(hash.slice(0, 12)) + '&hellip;' + esc(hash.slice(-6)) +
+    '</span> &middot; ' + binState.bits.length + ' BIT';
+}
+
+// Сколько проходов по 256 бит составляют один «блок».
+// 8 проходов ≈ 2048 бит ≈ полтора экрана — разделители не мельтешат.
+const ROUNDS_PER_BLOCK = 8;
+
+/** Один шаг: добавляет ровно один бит в активную строку. */
+function binStep() {
+  const st = binState;
+
+  // Проход закончился — циклически сдвигаем биты и начинаем заново
+  if (st.pos >= st.bits.length) {
+    st.bits = st.bits.slice(1) + st.bits[0];   // сдвиг влево на 1 бит
+    st.pos = 0;
+    st.round++;
+
+    // Каждые ROUNDS_PER_BLOCK проходов вставляем строку-разделитель
+    if (st.round % ROUNDS_PER_BLOCK === 0) {
+      st.block++;
+      binFlushLine();                          // дописываем текущую строку как есть
+      const sep = document.createElement('div');
+      const label = ' BLOCK 0x' + st.block.toString(16).toUpperCase().padStart(2, '0') +
+                    ' · OFFSET 0x' + (st.block * 256).toString(16).toUpperCase() + ' ';
+      const dashes = Math.max(0, binCols - label.length);
+      sep.innerHTML = '<span class="blk">' +
+        '─'.repeat(Math.floor(dashes / 2)) + label +
+        '─'.repeat(Math.ceil(dashes / 2)) + '</span>';
+      binDone.appendChild(sep);
+      trim(binDone, binVisibleRows() + 4);
+    }
+    return;
+  }
+
+  st.line += st.bits[st.pos++];
+  if (st.line.length >= binCols) binFlushLine();
+}
+
+/** Фиксирует активную строку как готовую и начинает новую. */
+function binFlushLine() {
+  const st = binState;
+  if (!st.line) return;
+  const row = document.createElement('div');
+  row.innerHTML = colorizeBits(st.line);
+  binDone.appendChild(row);
+  st.line = '';
+  // Держим в DOM чуть больше, чем видно на экране
+  trim(binDone, binVisibleRows() + 4);
+}
+
+/** Кадр анимации: печатаем пачку бит и перерисовываем активную строку. */
+const BITS_PER_FRAME = 22;   // ~1300 символов в секунду при 60 fps
+function binFrame() {
+  if (binState) {
+    for (let i = 0; i < BITS_PER_FRAME; i++) binStep();
+    binLive.innerHTML = colorizeBits(binState.line) + '<span class="caret">&nbsp;</span>';
+    // Держим поток прижатым к низу окна
+    binStreamEl.scrollTop = binStreamEl.scrollHeight;
+  }
+  requestAnimationFrame(binFrame);
+}
+
+// Пересчитываем ширину строки при изменении размера окна браузера
+window.addEventListener('resize', measureBinCols);
+
+// Стартовый хеш, чтобы окно не пустовало до первого HASH из Terminal
+startBinary(randStr(64, HEX));
+requestAnimationFrame(binFrame);
+</script>
+
+</body>
+</html>

@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sir John Shell</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="sys-header">
+  <div class="brand">
+    <span class="title">SIR JOHN SHELL</span>
+  </div>
+  <div class="sys-info">
+    <span class="pill" id="conn-pill"><span class="led ok"></span> ONLINE</span>
+    <select class="pill" id="mode-select"><option value="">MODE: —</option></select>
+    <select class="pill" id="model-select"><option value="">MODEL: —</option></select>
+    <span class="pill dim" id="session-pill">SESSION: —</span>
+  </div>
+</header>
+
+<main class="screens">
+  <div class="desktop" id="desktop">
+
+    <div class="col-left">
+      <div class="slot" id="slot-main">
+        <div class="main-view" id="main-view">
+
+          <section class="view active" id="view-chat">
+            <header class="titlebar"><span class="title">CHAT</span></header>
+            <div class="body" id="chat-body"></div>
+            <footer class="chat-footer">
+              <span class="cf-model" id="cf-model">—</span>
+              <div class="ctx-bar" title="Context usage">
+                <div class="ctx-fill" id="ctx-fill" style="width:0%"></div>
+              </div>
+              <span class="cf-ctx" id="cf-ctx">0 / 0</span>
+            </footer>
+          </section>
+
+          <section class="view" id="view-terminal">
+            <header class="titlebar"><span class="title">TERMINAL</span></header>
+            <div class="body" id="panel-terminal"></div>
+          </section>
+
+          <section class="view" id="view-tools">
+            <header class="titlebar"><span class="title">TOOLS</span></header>
+            <div class="body" id="panel-tools"></div>
+          </section>
+
+          <section class="view" id="view-skills">
+            <header class="titlebar"><span class="title">SKILLS / CONFIG</span></header>
+            <div class="body" id="panel-skills"></div>
+          </section>
+
+        </div>
+      </div>
+
+      <div class="slot-prompt" id="slot-prompt">
+        <div class="prompt-area">
+          <button class="voice-btn" id="voice-btn" title="Голосовой ввод">🎤</button>
+          <textarea class="prompt-input" id="prompt" placeholder="Введите сообщение..." rows="1"></textarea>
+          <button class="send-btn" id="send-btn">SEND</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-right">
+      <div class="slot" id="slot-side1">
+        <section class="window workspace-window">
+          <header class="titlebar"><span class="title">WORKSPACE</span></header>
+          <div class="body" id="workspace-body">
+            <div class="ws-path" id="ws-path">/</div>
+            <div class="ws-layout">
+              <div class="ws-tree" id="ws-tree"></div>
+              <div class="ws-file" id="ws-file"></div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="slot" id="slot-side2">
+        <section class="window thoughts-window">
+          <header class="titlebar"><span class="title">THOUGHTS</span></header>
+          <div class="body" id="thoughts-body"></div>
+        </section>
+      </div>
+
+      <nav class="switcher">
+        <button class="sw active" data-view="chat"><span class="num">1</span>MAIN</button>
+        <button class="sw" data-view="terminal"><span class="num">2</span>TERMINAL</button>
+        <button class="sw" data-view="tools"><span class="num">3</span>TOOLS</button>
+        <button class="sw" data-view="skills"><span class="num">4</span>SKILLS</button>
+      </nav>
+    </div>
+
+  </div>
+</main>
+
+<script src="main.js"></script>
+</body>
+</html>

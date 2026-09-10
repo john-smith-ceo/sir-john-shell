@@ -1,0 +1,2481 @@
+<!--
+  УСТАРЕВШАЯ РЕАЛИЗАЦИЯ — НЕ ИСПОЛЬЗОВАТЬ КАК ОБРАЗЕЦ
+
+  Первое поколение панели: один файл, вся логика в браузере, запросы к
+  Windmill идут напрямую с токеном на стороне страницы. Именно от этой
+  архитектуры и уходили: сейчас токен живёт только на сервере, а страница
+  ходит на свой origin — см. server.go и раздел «Устройство» в README.
+
+  Файл оставлен как история решений. Если вы ищете здесь, «как сделать
+  запрос к Windmill», вы смотрите не туда.
+
+  Отмечено по находке M-06 аудита 01.
+-->
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WINDMILL // ORCHESTRATOR MONITOR</title>
+<style>
+  /* ============================================================
+     БАЗА — тот же терминальный стиль, что и в hacker-terminal.html
+     ============================================================ */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    background: #0a0a0a;
+    color: #00ff00;
+    font-family: "Courier New", Courier, monospace;
+    font-size: 13px;
+    overflow: hidden;
+  }
+
+  body::after {
+    content: "";
+    position: fixed; inset: 0; pointer-events: none; z-index: 999;
+    background: repeating-linear-gradient(to bottom,
+      rgba(0,255,0,.03) 0px, rgba(0,255,0,.03) 1px, transparent 1px, transparent 3px);
+  }
+
+  /* ============================================================
+     ЭКРАНЫ И ПЕРЕКЛЮЧАТЕЛЬ
+     ============================================================
+     Экран 1 — то, что происходит прямо сейчас (лог, запуски, метрики, шаги).
+     Экран 2 — состояние воркспейса (что задеплоено, чем запускается, кто менял).
+     Переключение — кнопками внизу справа или клавишами 1 / 2.
+  */
+  .screen { display: none; }
+  .screen.active { display: block; }
+
+  /* ============================================================
+     ЗАСЛОНКА — когда страница не смогла прочитать свои файлы
+     ============================================================
+     Раньше об этом сообщала узкая полоска внутри окна runs: на других
+     вкладках её не видно, и происходящее выглядело как «просто демо».
+  */
+  #blocker {
+    position: fixed; inset: 0; z-index: 2000;
+    display: none; align-items: center; justify-content: center;
+    background: rgba(10, 10, 10, .93);
+    padding: 20px;
+  }
+  #blocker.show { display: flex; }
+  #blocker .card {
+    max-width: 640px; width: 100%;
+    background: #1a1a1a; border: 1px solid #333; border-radius: 8px;
+    padding: 22px 24px; box-shadow: 0 0 40px rgba(0, 255, 0, .07);
+  }
+  #blocker h2 {
+    font-size: 14px; letter-spacing: 2px; color: #ffbd2e;
+    font-weight: normal; margin-bottom: 14px;
+  }
+  #blocker p { font-size: 12px; line-height: 1.6; color: #a0a0a0; margin-bottom: 12px; }
+  #blocker code { color: #8be9fd; }
+  #blocker pre {
+    background: #111; border: 1px solid #2a2a2a; border-radius: 5px;
+    padding: 10px 12px; margin: 12px 0;
+    font-size: 12px; color: #00ff00; overflow-x: auto; white-space: pre;
+  }
+  #blocker .row { display: flex; gap: 8px; align-items: center; margin-top: 16px; }
+  #blocker .hint { flex: 1 1 auto; font-size: 11px; color: #555; }
+
+  .desktop {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 10px; padding: 10px;
+    height: calc(100vh - 42px);   /* снизу оставлено место под панель */
+  }
+
+  /* Нижняя панель: слева состояние подключения, справа переключатель экранов */
+  .taskbar {
+    position: fixed; left: 0; right: 0; bottom: 0; height: 42px;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; padding: 0 12px;
+    background: #141414; border-top: 1px solid #2a2a2a;
+    z-index: 1000;
+  }
+  #tb-info {
+    font-size: 11px; color: #666; letter-spacing: 1px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .switcher { display: flex; gap: 6px; flex: 0 0 auto; }
+  .sw {
+    font-family: inherit; font-size: 11px; letter-spacing: 1px;
+    padding: 6px 12px; border-radius: 5px; cursor: pointer;
+    color: #888; background: #1c1c1c; border: 1px solid #333;
+    transition: color .15s, border-color .15s, background-color .15s;
+  }
+  .sw:hover { color: #c0c0c0; border-color: #444; }
+  .sw.active { color: #00ff00; border-color: #2f5c2f; background: #16221a; }
+  .sw .num { color: #555; margin-right: 5px; }
+  .sw.active .num { color: #27c93f; }
+
+  .col-stack {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 10px; min-height: 0; min-width: 0;
+  }
+  .col-stack > .window:first-child { max-height: 66vh; }
+
+  .window {
+    display: flex; flex-direction: column;
+    min-width: 0; min-height: 0;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 0 20px rgba(0,255,0,.05);
+  }
+
+  /* Заголовок окна: только название, слева. Декоративных кнопок нет —
+     окна ничем не управляются, и имитировать их нечестно. */
+  .titlebar {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 7px 12px;
+    background: #222; border-bottom: 1px solid #333;
+    flex: 0 0 auto; user-select: none;
+  }
+  .title {
+    flex: 1 1 auto; min-width: 0;
+    color: #c0c0c0; font-size: 12px; letter-spacing: 2px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .title small { color: #666; letter-spacing: 0; }
+
+  .body {
+    flex: 1 1 auto;
+    overflow-y: auto; overflow-x: hidden;
+    padding: 10px;
+    word-break: break-all;
+    line-height: 1.5;
+  }
+  .body::-webkit-scrollbar { width: 8px; }
+  .body::-webkit-scrollbar-track { background: #111; }
+  .body::-webkit-scrollbar-thumb { background: #2a4a2a; border-radius: 4px; }
+
+  .cursor { display: inline-block; width: 8px; background: #00ff00; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 0%,50% { opacity: 1; } 50.01%,100% { opacity: 0; } }
+
+  /* ============================================================
+     ПОЛОСА СОСТОЯНИЯ ПОДКЛЮЧЕНИЯ
+     ============================================================ */
+  #conn {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 7px;
+    padding: 5px 10px;
+    font-size: 10px; letter-spacing: 1px;
+    background: #151515; border-bottom: 1px solid #2a2a2a;
+    color: #777; white-space: nowrap; overflow: hidden;
+  }
+  #conn .led { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+  #conn.ok    .led { background: #27c93f; box-shadow: 0 0 6px #27c93f; animation: pulse 2s ease-in-out infinite; }
+  #conn.warn  .led { background: #ffbd2e; box-shadow: 0 0 6px #ffbd2e; }
+  #conn.err   .led { background: #ff5f56; box-shadow: 0 0 6px #ff5f56; }
+  #conn.demo  .led { background: #8be9fd; box-shadow: 0 0 6px #8be9fd; animation: pulse 2s ease-in-out infinite; }
+  #conn .msg { overflow: hidden; text-overflow: ellipsis; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+
+  /* Подсказка при ошибке — разворачивается под полосой состояния */
+  #conn-hint {
+    flex: 0 0 auto;
+    display: none;
+    padding: 8px 10px;
+    font-size: 11px; line-height: 1.5;
+    color: #ffbd2e;
+    background: #1d1a12; border-bottom: 1px solid #3a3320;
+  }
+  #conn-hint code { color: #8be9fd; }
+
+  /* ============================================================
+     ОКНО 1 — живой лог текущего job
+     ============================================================ */
+  #log { white-space: pre-wrap; font-size: 12px; line-height: 1.45; }
+  #log .l-err  { color: #ff5f56; }
+  #log .l-warn { color: #ffbd2e; }
+  #log .l-ts   { color: #6272a4; }
+  #log .l-info { color: #00ff00; }
+  #log .l-dim  { color: #777; }
+  #log .l-hl   { color: #8be9fd; }
+
+  /* ============================================================
+     ОКНО 2 — лента запусков
+     ============================================================ */
+  #runs { font-size: 12px; }
+  .run {
+    display: flex; gap: 6px; align-items: baseline;
+    padding: 1px 3px; border-radius: 3px;
+    cursor: pointer;
+  }
+  .run:hover { background: #232323; }
+  .run.sel { background: #1e2c1e; outline: 1px solid #2f5c2f; }
+  .run .t    { color: #555; flex: 0 0 auto; }
+  .run .ic   { flex: 0 0 auto; width: 12px; text-align: center; }
+  .run .path { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .run .d    { color: #666; flex: 0 0 auto; }
+
+  .st-running  { color: #8be9fd; }
+  .st-queued   { color: #999; }
+  .st-success  { color: #27c93f; }
+  .st-failure  { color: #ff5f56; }
+  .st-canceled { color: #ffbd2e; }
+
+  /* ============================================================
+     ОКНО 3 — метрики
+     ============================================================ */
+  .section-title {
+    color: #666; font-size: 11px; letter-spacing: 2px;
+    margin: 8px 0 5px; border-bottom: 1px dashed #333; padding-bottom: 3px;
+  }
+  .section-title:first-child { margin-top: 0; }
+
+  table.metrics { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.metrics td { padding: 2px 0; vertical-align: middle; }
+  table.metrics td.name  { color: #c0c0c0; width: 84px; }
+  table.metrics td.value { text-align: right; width: 66px; font-weight: bold; }
+
+  .bar-track { height: 8px; background: #262626; border-radius: 2px; overflow: hidden; }
+  .bar-fill { height: 100%; width: 0; border-radius: 2px; transition: width .5s ease, background-color .5s ease; }
+  .lvl-ok { background: #27c93f; } .lvl-warn { background: #ffbd2e; } .lvl-crit { background: #ff5f56; }
+  .c-ok { color: #27c93f; } .c-warn { color: #ffbd2e; } .c-crit { color: #ff5f56; }
+
+  .histogram {
+    display: flex; align-items: flex-end; gap: 2px;
+    height: 44px; background: #141414;
+    border: 1px solid #2a2a2a; border-radius: 3px; padding: 4px;
+  }
+  .histogram .col { flex: 1; background: #27c93f; border-radius: 1px 1px 0 0; min-height: 2px; transition: height .4s ease; }
+
+  #paths { font-size: 11px; }
+  .path-row { display: flex; align-items: center; gap: 6px; color: #999; padding: 1px 0; }
+  .path-row .led { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+  .path-row .p { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .path-row .n { color: #666; flex: 0 0 auto; }
+
+  #alerts { font-size: 11px; line-height: 1.45; white-space: pre-wrap; flex: 1 1 auto; min-height: 60px; overflow-y: auto; }
+  #alerts::-webkit-scrollbar { width: 8px; }
+  #alerts::-webkit-scrollbar-track { background: #111; }
+  #alerts::-webkit-scrollbar-thumb { background: #2a4a2a; border-radius: 4px; }
+  #alerts .ts { color: #555; }
+  #alerts .INFO { color: #27c93f; } #alerts .WARN { color: #ffbd2e; } #alerts .ERROR { color: #ff5f56; }
+  #alerts .msg { color: #a0a0a0; }
+
+  #metrics-body { display: flex; flex-direction: column; overflow-y: auto; }
+  #metrics-body .fixed-part { flex: 0 0 auto; }
+
+  /* ============================================================
+     ОКНО 4 — шаги флоу / карточка job
+     ============================================================ */
+  #flow { font-size: 12px; }
+  .step {
+    display: flex; align-items: center; gap: 7px;
+    padding: 3px 4px; border-radius: 3px; margin-bottom: 2px;
+    border-left: 2px solid #333;
+  }
+  .step.cur { background: #16221d; border-left-color: #8be9fd; }
+  .step .idx { color: #555; flex: 0 0 auto; width: 20px; }
+  .step .id  { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #c0c0c0; }
+  .step .badge { flex: 0 0 auto; font-size: 10px; letter-spacing: 1px; }
+  .step .iter { color: #6272a4; flex: 0 0 auto; font-size: 11px; }
+
+  .kv { display: flex; gap: 8px; padding: 2px 0; font-size: 12px; }
+  .kv .k { color: #666; width: 92px; flex: 0 0 auto; }
+  .kv .v { color: #c0c0c0; flex: 1 1 auto; overflow-wrap: anywhere; }
+  .kv .v.hl { color: #8be9fd; }
+
+  pre.args {
+    margin-top: 6px; padding: 6px 8px;
+    background: #141414; border: 1px solid #2a2a2a; border-radius: 3px;
+    color: #f1fa8c; font-size: 11px; line-height: 1.4;
+    white-space: pre-wrap; max-height: 140px; overflow: auto;
+  }
+  pre.args::-webkit-scrollbar { width: 8px; }
+  pre.args::-webkit-scrollbar-thumb { background: #2a4a2a; border-radius: 4px; }
+
+  .empty { color: #555; font-size: 12px; padding: 6px 0; }
+
+  /* ============================================================
+     ЭКРАН 4 — монитор Harvester (TASK-001)
+     ============================================================
+     Ключевое требование контракта: 0, null и not_implemented — три разных
+     состояния, и подменять их друг другом запрещено. Поэтому у значения
+     три вида: число, прочерк для null и метка «не реализовано».
+  */
+  .kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .kpi {
+    background: #141414; border: 1px solid #2a2a2a; border-radius: 4px;
+    padding: 7px 9px; min-width: 0;
+  }
+  .kpi .k { font-size: 10px; letter-spacing: 1px; color: #666; white-space: nowrap;
+            overflow: hidden; text-overflow: ellipsis; }
+  .kpi .v { font-size: 17px; color: #00ff00; margin-top: 3px; }
+  .kpi .v.null { color: #555; }              /* null — прочерк, не ноль        */
+  .kpi .v.ni   { color: #6272a4; font-size: 11px; letter-spacing: 1px; }
+  .kpi .sub { font-size: 10px; color: #555; margin-top: 2px; }
+  .kpi.wide { grid-column: 1 / -1; }
+  .kpi.crit .v { color: #ff5f56; }
+  .kpi.warn .v { color: #ffbd2e; }
+
+  /* Воронка: сырые → уникальные → канонические → готовые к продажам */
+  .funnel { display: flex; gap: 4px; margin-top: 2px; }
+  .funnel .st {
+    flex: 1 1 0; min-width: 0; text-align: center;
+    background: #141414; border: 1px solid #2a2a2a; border-radius: 4px; padding: 6px 3px;
+  }
+  .funnel .st .n { font-size: 15px; color: #00ff00; }
+  .funnel .st .n.zero { color: #555; }
+  .funnel .st .l { font-size: 9px; color: #666; letter-spacing: 0; margin-top: 2px;
+                   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .badge {
+    display: inline-block; font-size: 10px; letter-spacing: 1px;
+    padding: 1px 6px; border-radius: 3px; border: 1px solid;
+  }
+  .b-running { color: #8be9fd; border-color: #8be9fd55; }
+  .b-idle    { color: #27c93f; border-color: #27c93f55; }
+  .b-queued  { color: #999;    border-color: #99999955; }
+  .b-degraded{ color: #ffbd2e; border-color: #ffbd2e55; }
+  .b-offline { color: #ff5f56; border-color: #ff5f5655; }
+  .b-unknown { color: #6272a4; border-color: #6272a455; }
+  .b-ni      { color: #6272a4; border-color: #6272a455; }
+  .b-active  { color: #27c93f; border-color: #27c93f55; }
+  .b-partial { color: #ffbd2e; border-color: #ffbd2e55; }
+
+  /* Полоска состояния снимка: когда собран, живой или фикстуры */
+  #db-meta {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+    padding: 5px 10px; font-size: 10px; letter-spacing: 1px; color: #666;
+    background: #151515; border-bottom: 1px solid #2a2a2a;
+  }
+  #db-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #db-meta .fx { color: #ffbd2e; }
+  /* Подписи в этом окне длиннее общих, иначе «последний успех» переносится */
+  #harvester .kv .k { width: 132px; }
+  #db-meta .lv { color: #27c93f; }
+  #db-meta .err { color: #ff5f56; }
+
+  /* Список компаний */
+  .co {
+    display: flex; align-items: baseline; gap: 7px;
+    padding: 2px 4px; border-radius: 3px; cursor: pointer; font-size: 12px;
+  }
+  .co:hover { background: #232323; }
+  .co.sel { background: #16221a; outline: 1px solid #2f5c2f; }
+  .co .rt { flex: 0 0 auto; font-size: 9px; letter-spacing: 1px; width: 26px; }
+  .co .rt.cand { color: #6272a4; }
+  .co .rt.org  { color: #27c93f; }
+  .co .nm { flex: 1 1 auto; min-width: 0; color: #c0c0c0;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .co .ct { flex: 0 0 auto; color: #666; font-size: 11px; }
+  .co .cf { flex: 0 0 auto; font-size: 11px; }
+
+  .pager { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 11px; color: #666; }
+  .pager .btn { padding: 3px 9px; }
+
+  /* Карточка компании */
+  #company .sec { margin-top: 10px; }
+  #company .kv .k { width: 116px; }
+  .ev {
+    border-left: 2px solid #2a2a2a; padding: 3px 0 3px 8px;
+    margin-bottom: 5px; font-size: 11px;
+  }
+  .ev .q { color: #f1fa8c; }
+  .ev .src { color: #6272a4; }
+  .ev .meta { color: #555; }
+
+  /* ============================================================
+     ЭКРАН 3 — запуск исследования
+     ============================================================
+     Боковые окна во всю высоту, центральное — в половину и по центру
+     по вертикали. За это отвечает .slot-center: он растянут на всю
+     строку грида, а окно внутри занимает половину его высоты.
+  */
+  .slot-center { display: flex; align-items: center; min-height: 0; min-width: 0; }
+  .slot-center > .window { height: 50%; width: 100%; }
+
+  /* Список отраслей */
+  .sector {
+    display: flex; align-items: baseline; gap: 7px;
+    padding: 3px 5px; border-radius: 3px; cursor: pointer; font-size: 12px;
+  }
+  .sector:hover { background: #232323; }
+  .sector.sel { background: #16221a; outline: 1px solid #2f5c2f; }
+  .sector .nm  { flex: 1 1 auto; color: #c0c0c0; }
+  .sector.sel .nm { color: #00ff00; }
+  .sector .cnt { color: #666; font-size: 11px; flex: 0 0 auto; }
+
+  .acts { margin: 3px 0 8px 10px; border-left: 1px solid #2a2a2a; padding-left: 8px; }
+  .act {
+    display: flex; align-items: baseline; gap: 6px;
+    padding: 2px 3px; font-size: 11px; cursor: pointer; border-radius: 3px;
+  }
+  .act:hover { background: #222; }
+  .act .code { color: #8be9fd; flex: 0 0 auto; width: 42px; }
+  .act .nm   { flex: 1 1 auto; color: #999; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .act.on .nm { color: #c0c0c0; }
+  .act input { accent-color: #27c93f; }
+
+  /* Метки разрешительного режима из справочника */
+  .reg { font-size: 9px; letter-spacing: 1px; padding: 1px 4px; border-radius: 3px; flex: 0 0 auto; }
+  .reg-free         { color: #27c93f; border: 1px solid #27c93f44; }
+  .reg-notification { color: #8be9fd; border: 1px solid #8be9fd44; }
+  .reg-license      { color: #ff5f56; border: 1px solid #ff5f5644; }
+  .reg-registry     { color: #ffbd2e; border: 1px solid #ffbd2e44; }
+
+  /* Регионы */
+  .tools { display: flex; gap: 6px; margin-bottom: 7px; }
+  .tools input[type=text] {
+    flex: 1 1 auto; min-width: 0;
+    font-family: inherit; font-size: 11px; color: #c0c0c0;
+    background: #141414; border: 1px solid #333; border-radius: 4px; padding: 5px 7px;
+  }
+  .tools input[type=text]:focus { outline: none; border-color: #2f5c2f; }
+  .btn {
+    font-family: inherit; font-size: 11px; letter-spacing: 1px;
+    padding: 5px 9px; border-radius: 4px; cursor: pointer;
+    color: #888; background: #1c1c1c; border: 1px solid #333;
+  }
+  .btn:hover { color: #c0c0c0; border-color: #444; }
+
+  .district { margin-bottom: 6px; }
+  .district > .dh {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; letter-spacing: 1px; color: #666;
+    border-bottom: 1px dashed #333; padding: 3px 0; cursor: pointer;
+  }
+  .district > .dh:hover { color: #c0c0c0; }
+  .district .dn { color: #6272a4; }
+  .region {
+    display: flex; align-items: baseline; gap: 6px;
+    padding: 1px 3px 1px 14px; font-size: 11px; cursor: pointer; border-radius: 3px;
+  }
+  .region:hover { background: #222; }
+  .region .code { color: #555; flex: 0 0 auto; width: 20px; }
+  .region .nm   { flex: 1 1 auto; color: #999; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .region.on .nm { color: #00ff00; }
+  .region .ctr  { color: #555; flex: 0 0 auto; }
+  .region input { accent-color: #27c93f; }
+  .region .disp { color: #ffbd2e; flex: 0 0 auto; font-size: 10px; }
+
+  /* Центральное окно управления */
+  #control-body { display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+  #prompt {
+    flex: 1 1 auto; min-height: 54px; resize: none;
+    font-family: inherit; font-size: 12px; line-height: 1.45; color: #c0c0c0;
+    background: #141414; border: 1px solid #333; border-radius: 4px; padding: 7px 8px;
+  }
+  #prompt:focus { outline: none; border-color: #2f5c2f; }
+  #prompt::placeholder { color: #444; }
+
+  #summary { font-size: 11px; color: #666; letter-spacing: 1px; flex: 0 0 auto; }
+  #summary b { color: #00ff00; font-weight: normal; }
+  #summary .warn { color: #ffbd2e; }
+
+  #run {
+    flex: 0 0 auto;
+    font-family: inherit; font-size: 13px; letter-spacing: 2px;
+    padding: 11px; border-radius: 5px; cursor: pointer;
+    color: #00ff00; background: #16221a; border: 1px solid #2f5c2f;
+    transition: background-color .15s, border-color .15s;
+  }
+  #run:hover:not(:disabled) { background: #1d2f21; border-color: #3f7c3f; }
+  #run:disabled { color: #555; background: #191919; border-color: #2a2a2a; cursor: not-allowed; }
+  #run.busy { color: #ffbd2e; border-color: #6a5a20; background: #221d12; }
+
+  #history { flex: 0 0 auto; max-height: 92px; overflow-y: auto; font-size: 11px; line-height: 1.5; }
+  #history::-webkit-scrollbar { width: 8px; }
+  #history::-webkit-scrollbar-thumb { background: #2a4a2a; border-radius: 4px; }
+  .hi { display: flex; gap: 6px; align-items: baseline; }
+  .hi .t { color: #555; flex: 0 0 auto; }
+  .hi .s { flex: 1 1 auto; color: #999; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hi .r { flex: 0 0 auto; }
+
+  /* ============================================================
+     ЭКРАН 2 — состояние воркспейса
+     ============================================================ */
+  .item {
+    display: flex; align-items: baseline; gap: 7px;
+    padding: 2px 3px; border-radius: 3px; font-size: 12px;
+  }
+  .item:hover { background: #232323; }
+  .item .k    { flex: 0 0 auto; width: 13px; text-align: center; color: #6272a4; }
+  .item .p    { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #c0c0c0; }
+  .item .lang { flex: 0 0 auto; font-size: 10px; color: #6272a4; letter-spacing: 1px; }
+  .item .flag { flex: 0 0 auto; font-size: 10px; letter-spacing: 1px; }
+  .item .sub  { color: #666; font-size: 11px; }
+  .item.arch .p { color: #555; text-decoration: line-through; }
+  .item.bad  .p { color: #ff5f56; }
+
+  .counts { font-size: 11px; color: #666; letter-spacing: 1px; margin-bottom: 6px; }
+  .counts b { color: #00ff00; font-weight: normal; }
+
+  /* Аудит */
+  #audit { font-size: 11px; line-height: 1.5; }
+  .au { display: flex; gap: 7px; align-items: baseline; padding: 1px 2px; }
+  .au .t   { color: #555; flex: 0 0 auto; }
+  .au .who { color: #8be9fd; flex: 0 0 auto; }
+  .au .op  { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .au .res { color: #999; }
+  .ak-Create  { color: #27c93f; }
+  .ak-Update  { color: #ffbd2e; }
+  .ak-Delete  { color: #ff5f56; }
+  .ak-Execute { color: #6272a4; }
+
+  @media (max-width: 900px) {
+    html, body { overflow: auto; }
+    .desktop { grid-template-columns: 1fr; height: auto; }
+    .col-stack { grid-template-rows: auto auto; }
+    .window { height: 70vh; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ==================== ЗАСЛОНКА ==================== -->
+<div id="blocker">
+  <div class="card">
+    <h2 id="bl-title">СТРАНИЦА НЕ ВИДИТ СВОИ ФАЙЛЫ</h2>
+    <div id="bl-body"></div>
+    <div class="row">
+      <span class="hint">данные из Windmill и справочники сейчас недоступны</span>
+      <button class="btn" id="bl-close">продолжить в демо-режиме</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== ЭКРАН 1: происходящее сейчас ==================== -->
+<div class="screen active" id="screen-1">
+<div class="desktop">
+
+  <!-- ================= ОКНО 1: живой лог ================= -->
+  <section class="window">
+    <header class="titlebar">
+      <span class="title">job log <small id="log-job"></small></span>
+    </header>
+    <div class="body" id="log"></div>
+  </section>
+
+  <!-- ================= ОКНО 2: лента запусков ================= -->
+  <section class="window">
+    <header class="titlebar">
+      <span class="title">runs</span>
+    </header>
+    <div id="conn"><span class="led"></span><span class="msg">init...</span></div>
+    <div id="conn-hint"></div>
+    <div class="body" id="runs"></div>
+  </section>
+
+  <!-- ====== ПРАВАЯ КОЛОНКА ====== -->
+  <div class="col-stack">
+
+    <!-- ================= ОКНО 3: метрики ================= -->
+    <section class="window">
+      <header class="titlebar">
+        <span class="title">metrics</span>
+      </header>
+      <div class="body" id="metrics-body">
+        <div class="fixed-part">
+          <div class="section-title">ORCHESTRATOR</div>
+          <table class="metrics"><tbody id="metrics"></tbody></table>
+
+          <div class="section-title">RUNNING HISTORY</div>
+          <div class="histogram" id="histogram"></div>
+
+          <div class="section-title">TOP PATHS</div>
+          <div id="paths"></div>
+
+          <div class="section-title">ALERTS</div>
+        </div>
+        <div id="alerts"></div>
+      </div>
+    </section>
+
+    <!-- ================= ОКНО 4: шаги флоу ================= -->
+    <section class="window">
+      <header class="titlebar">
+        <span class="title">flow</span>
+      </header>
+      <div class="body" id="flow"></div>
+    </section>
+
+  </div>
+</div>
+</div><!-- /screen-1 -->
+
+<!-- ==================== ЭКРАН 2: состояние воркспейса ==================== -->
+<div class="screen" id="screen-2">
+<div class="desktop">
+
+  <!-- ================= ОКНО 5: инвентарь ================= -->
+  <section class="window">
+    <header class="titlebar">
+      <span class="title">workspace</span>
+    </header>
+    <div class="body" id="workspace"></div>
+  </section>
+
+  <!-- ================= ОКНО 6: расписания и триггеры ================= -->
+  <section class="window">
+    <header class="titlebar">
+      <span class="title">triggers</span>
+    </header>
+    <div class="body" id="triggers"></div>
+  </section>
+
+  <!-- ================= ОКНО 7: аудит ================= -->
+  <section class="window">
+    <header class="titlebar">
+      <span class="title">audit</span>
+    </header>
+    <div class="body" id="audit"></div>
+  </section>
+
+</div>
+</div><!-- /screen-2 -->
+
+<!-- ==================== ЭКРАН 3: запуск исследования ==================== -->
+<div class="screen" id="screen-3">
+<div class="desktop">
+
+  <!-- ================= ОКНО 8: отрасли ================= -->
+  <section class="window">
+    <header class="titlebar">
+      <span class="title">sectors <small id="sec-count"></small></span>
+    </header>
+    <div class="body" id="sectors"></div>
+  </section>
+
+  <!-- ================= ОКНО 9: управление (половина высоты, по центру) ================= -->
+  <div class="slot-center">
+    <section class="window">
+      <header class="titlebar">
+        <span class="title">research</span>
+      </header>
+      <div class="body" id="control-body">
+        <textarea id="prompt" placeholder="дополнение к промпту для Perplexity..."></textarea>
+        <div id="summary"></div>
+        <button id="run" disabled>ЗАПУСК ИССЛЕДОВАНИЯ</button>
+        <div id="history"></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ================= ОКНО 10: регионы ================= -->
+  <section class="window">
+    <header class="titlebar">
+      <span class="title">regions <small id="reg-count"></small></span>
+    </header>
+    <div class="body" id="regions">
+      <div class="tools">
+        <input type="text" id="reg-search" placeholder="поиск по названию или центру">
+        <button class="btn" id="reg-all">все</button>
+        <button class="btn" id="reg-none">снять</button>
+      </div>
+      <div id="reg-list"></div>
+    </div>
+  </section>
+
+</div>
+</div><!-- /screen-3 -->
+
+<!-- ==================== ЭКРАН 4: монитор Harvester ==================== -->
+<div class="screen" id="screen-4">
+<div class="desktop">
+
+  <!-- ================= ОКНО 11: сводка ================= -->
+  <section class="window">
+    <header class="titlebar"><span class="title">harvester <small id="db-status"></small></span></header>
+    <div id="db-meta"><span>—</span></div>
+    <div class="body" id="harvester"></div>
+  </section>
+
+  <!-- ================= ОКНО 12: список компаний ================= -->
+  <section class="window">
+    <header class="titlebar"><span class="title">companies <small id="co-count"></small></span></header>
+    <div class="body" id="companies">
+      <div class="tools">
+        <input type="text" id="co-search" placeholder="поиск по названию, адресу, городу">
+        <button class="btn" id="co-reload">обновить</button>
+      </div>
+      <div id="co-list"></div>
+      <div class="pager">
+        <button class="btn" id="co-prev">назад</button>
+        <span id="co-page">—</span>
+        <button class="btn" id="co-next">вперёд</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= ОКНО 13: карточка компании ================= -->
+  <section class="window">
+    <header class="titlebar"><span class="title">company</span></header>
+    <div class="body" id="company"></div>
+  </section>
+
+</div>
+</div><!-- /screen-4 -->
+
+<!-- ==================== НИЖНЯЯ ПАНЕЛЬ ==================== -->
+<div class="taskbar">
+  <div id="tb-info">init...</div>
+  <div class="switcher">
+    <button class="sw active" data-screen="1"><span class="num">1</span>live</button>
+    <button class="sw" data-screen="2"><span class="num">2</span>state</button>
+    <button class="sw" data-screen="3"><span class="num">3</span>research</button>
+    <button class="sw" data-screen="4"><span class="num">4</span>database</button>
+  </div>
+</div>
+
+<script>
+/* ==================================================================
+   КОНФИГУРАЦИЯ
+   ==================================================================
+   Ничего править здесь не нужно: всё берётся из соседнего env.md.
+   Значения ниже — только запасные, на случай если env.md не прочитался.
+
+   Важно: браузер не даёт странице, открытой как file://, читать соседние
+   файлы. Поэтому при работе через env.md страницу надо открывать по http —
+   проще всего через windmill-proxy.py, он и раздаёт её, и читает тот же env.md.
+*/
+const CONFIG = {
+  base:      'https://app.windmill.dev',
+  workspace: 'my-workspace',
+  token:     '',              // пусто -> демо-режим
+
+  pollJobsMs:    1500,        // как часто обновлять ленту запусков и метрики
+  pollLogMs:     700,         // как часто дотягивать лог текущего job (в режиме опроса)
+  jobsPerPage:   60,          // сколько последних job'ов держим в ленте
+  useSSE:        true,        // тянуть лог через server-sent events; при ошибке — откат на опрос
+  typewriter:    true,        // посимвольная выдача лога (косметика; отстающий хвост сбрасывается пачкой)
+
+  // Вкладка research. Адрес и токен получателя живут только в прокси,
+  // сюда попадают лишь режим и путь — для подписей в интерфейсе.
+  splitByRegion:    false,    // true — отдельный запрос на каждый регион
+  researchMode:     'stub',
+  researchRunnable: ''
+};
+
+// Соответствие ключей env.md полям CONFIG
+const ENV_MAP = {
+  base: 'base', workspace: 'workspace', token: 'token',
+  poll_jobs_ms: 'pollJobsMs', poll_log_ms: 'pollLogMs',
+  jobs_per_page: 'jobsPerPage', use_sse: 'useSSE', typewriter: 'typewriter',
+  split_by_region: 'splitByRegion', research_mode: 'researchMode',
+  research_runnable: 'researchRunnable'
+};
+
+/**
+ * Читает env.md и накладывает его значения на CONFIG.
+ * Разбор нарочно примитивный: строки вида `ключ: значение` с латинским ключом
+ * в начале строки. Всё остальное (заголовки, проза, отступы) — комментарии.
+ */
+async function loadEnv() {
+  const res = await fetch('env.md', { cache: 'no-store' });
+  if (!res.ok) { const e = new Error('HTTP ' + res.status); e.status = res.status; throw e; }
+  const text = await res.text();
+
+  let applied = 0;
+  for (const line of text.split('\n')) {
+    const m = line.match(/^([a-z_]+)\s*[:=]\s*(.*)$/);
+    if (!m) continue;
+    const field = ENV_MAP[m[1]];
+    if (!field) continue;
+
+    let val = m[2].trim().replace(/^['"]|['"]$/g, '');
+    if (val === '') { if (m[1] === 'token') CONFIG.token = ''; continue; }
+
+    if (typeof CONFIG[field] === 'boolean') val = /^(true|1|yes|да)$/i.test(val);
+    else if (typeof CONFIG[field] === 'number') { const n = Number(val); if (Number.isNaN(n)) continue; val = n; }
+    else val = val.replace(/\/+$/, '');   // базовый адрес — без слэша на конце
+
+    CONFIG[field] = val;
+    applied++;
+  }
+  return applied;
+}
+
+/* ==================================================================
+   УТИЛИТЫ
+   ================================================================== */
+const $ = id => document.getElementById(id);
+const randInt = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
+const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+function autoScroll(el) {
+  if (el.scrollHeight - el.scrollTop - el.clientHeight < 60) el.scrollTop = el.scrollHeight;
+}
+function trim(el, max) { while (el.childNodes.length > max) el.removeChild(el.firstChild); }
+
+function hhmmss(d) {
+  const p = n => String(n).padStart(2, '0');
+  return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+/** Длительность в человекочитаемом виде: 780ms / 3.4s / 2m10s */
+function dur(ms) {
+  if (ms == null) return '';
+  if (ms < 1000) return ms + 'ms';
+  if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+  return Math.floor(ms / 60000) + 'm' + String(Math.round(ms % 60000 / 1000)).padStart(2, '0') + 's';
+}
+/**
+ * Короткий id: последние 8 символов uuid.
+ * Именно последние: Windmill выдаёт упорядоченные по времени uuid, у которых
+ * начало совпадает у всех job'ов одного периода — по первым 8 символам их
+ * не различить (на 60 job'ов приходится около десятка разных префиксов).
+ */
+const shortId = id => String(id || '').slice(-8);
+
+/* ==================================================================
+   СОСТОЯНИЕ
+   ================================================================== */
+let DEMO = true;   // окончательно определяется после чтения env.md
+
+const state = {
+  jobs: [],              // последний ответ jobs/list, новые сверху
+  known: new Map(),      // id -> статус, по нему ловим переходы
+  selected: null,        // id job'а, чей лог показываем
+  pinned: false,         // true — пользователь сам выбрал job кликом
+  log: { id: null, offset: 0, pending: '', done: false },
+  flowStatus: null,      // flow_status выбранного job'а
+  jobDetail: null,       // сам объект выбранного job'а
+  runningHistory: [],    // история числа running для гистограммы
+  sseAbort: null,        // AbortController активного SSE-стрима
+  screen: 1              // открытый экран: 1 — происходящее, 2 — состояние
+};
+
+/* ==================================================================
+   HTTP-СЛОЙ
+   ==================================================================
+   Токен уходит только в заголовке Authorization — в URL его класть нельзя,
+   иначе он осядет в логах прокси и в истории браузера.
+*/
+function apiUrl(path, params) {
+  const u = new URL(CONFIG.base.replace(/\/+$/, '') + '/api' + path);
+  if (params) for (const [k, v] of Object.entries(params)) if (v !== null && v !== undefined) u.searchParams.set(k, v);
+  return u.toString();
+}
+
+async function apiRaw(path, params) {
+  const res = await fetch(apiUrl(path, params), {
+    headers: { Authorization: 'Bearer ' + CONFIG.token },
+    credentials: 'omit'
+  });
+  if (!res.ok) {
+    const err = new Error('HTTP ' + res.status);
+    err.status = res.status;
+    throw err;
+  }
+  return res;
+}
+
+async function api(path, params) { return (await apiRaw(path, params)).json(); }
+/** Некоторые эндпоинты (get_logs) отдают text/plain, а не JSON. */
+async function apiText(path, params) { return (await apiRaw(path, params)).text(); }
+
+/* ------------------------------------------------------------------
+   Индикатор подключения + человеческие подсказки на частые ошибки
+   ------------------------------------------------------------------ */
+const connEl = $('conn'), connMsgEl = connEl.querySelector('.msg'), hintEl = $('conn-hint');
+
+function setConn(kind, text, hint) {
+  connEl.className = kind;
+  connMsgEl.textContent = text;
+  // Дублируем в нижнюю панель — на втором экране окна runs не видно
+  const tb = $('tb-info');
+  if (tb) tb.textContent = text;
+  if (hint) { hintEl.innerHTML = hint; hintEl.style.display = 'block'; }
+  else { hintEl.style.display = 'none'; }
+}
+
+/**
+ * Показывает заслонку на весь экран.
+ * Нужна ровно для одного случая: страницу открыли двойным кликом, браузер
+ * запретил ей читать env.md и справочники, и всё выглядит как «просто демо».
+ */
+let blockerShown = false;
+function showBlocker(what) {
+  if (blockerShown) return;
+  blockerShown = true;
+
+  const viaFile = location.protocol === 'file:';
+  const body = viaFile
+    ? '<p>Страница открыта как <code>file://</code>. В этом режиме браузер запрещает ей ' +
+      'читать соседние файлы, поэтому не прочитались ' + what + '.</p>' +
+      '<p>Запустите прокси — он раздаёт эту же страницу по http, отдаёт ей справочники ' +
+      'и ходит в Windmill за данными:</p>' +
+      '<pre>go run "' + esc(RUN_HINT_DIR) + '/windmill-proxy.go"</pre>' +
+      '<p>Затем откройте <code>http://localhost:8787/</code>. Обычный статический сервер ' +
+      'тут не поможет: кроме файлов нужны ещё <code>/api</code> и <code>/research</code>.</p>'
+    : '<p>Не прочитались ' + what + '. Они должны лежать в одной папке со страницей — ' +
+      'той же, где <code>windmill-proxy.go</code>.</p>' +
+      '<p>Если страницу раздаёт прокси, проверьте его вывод: в строке <code>Папка:</code> ' +
+      'указано, где он их ищет.</p>';
+
+  $('bl-body').innerHTML = body;
+  $('blocker').classList.add('show');
+}
+
+$('bl-close').addEventListener('click', () => $('blocker').classList.remove('show'));
+
+// Путь к папке для подсказки в заслонке: вытаскиваем из адреса файла
+const RUN_HINT_DIR = location.protocol === 'file:'
+  ? decodeURIComponent(location.pathname.replace(/\/[^/]*$/, ''))
+  : '.';
+
+function explainError(e) {
+  // fetch бросает TypeError и на CORS, и на недоступный хост — различить их из JS нельзя
+  if (e instanceof TypeError) {
+    return 'Запрос не ушёл. Обычно это CORS: страница открыта как <code>file://</code>, ' +
+           'браузер шлёт <code>Origin: null</code>, и Windmill такой запрос отклоняет. ' +
+           'Проверьте вкладку Network в DevTools — если там preflight <code>OPTIONS</code> без ' +
+           '<code>access-control-allow-origin</code>, поднимите локальный прокси (см. windmill-proxy.py рядом с этим файлом).';
+  }
+  if (e.status === 401) return 'Токен не принят (401). Создайте новый в Windmill: User settings -> Tokens.';
+  if (e.status === 403) return 'Токена не хватает прав на этот воркспейс (403). Проверьте <code>CONFIG.workspace</code>.';
+  if (e.status === 404) return 'Не найдено (404). Скорее всего опечатка в <code>CONFIG.workspace</code> или в <code>CONFIG.base</code>.';
+  return 'Ответ сервера: ' + (e.status ? 'HTTP ' + e.status : e.message);
+}
+
+/* ==================================================================
+   ОКНО 1 — живой лог
+   ==================================================================
+   Лог приходит кусками (getupdate отдаёт только новое с log_offset).
+   Куски кладём в state.log.pending, а rAF-цикл выдаёт их на экран
+   посимвольно — сохраняется эффект печати. Если хвост отстал больше
+   чем на 1500 символов (job резко насыпал логов), сбрасываем пачкой,
+   чтобы не отставать от реальности.
+*/
+const logEl = $('log');
+const logDone = document.createElement('div');
+const logLive = document.createElement('div');
+logEl.appendChild(logDone);
+logEl.appendChild(logLive);
+
+let logLine = '';   // незавершённая строка (без \n)
+
+/** Раскраска строки лога по её содержимому. */
+function colorLogLine(line) {
+  let cls = 'l-info';
+  // Заголовки шагов из get_flow_all_logs: === Step health (Job: ...) ===
+  if (/^\s*===/.test(line)) return '<span class="l-hl">' + esc(line) + '</span>';
+
+  if (/\b(error|failed|failure|exception|panic|traceback|fatal)\b/i.test(line)) cls = 'l-err';
+  else if (/\b(warn|warning|retry|retrying|deprecated)\b/i.test(line)) cls = 'l-warn';
+  else if (/^\s*(--- |\[|#)/.test(line)) cls = 'l-dim';
+  else if (/^\s*[{}\[\]]/.test(line) || /^\s*"[\w-]+"\s*:/.test(line)) cls = 'l-hl';
+
+  // Метку времени в начале строки подсвечиваем отдельно
+  const m = line.match(/^(\d{4}-\d\d-\d\dT?[\d:.]*Z?|\d\d:\d\d:\d\d(?:\.\d+)?)\s/);
+  if (m) {
+    return '<span class="l-ts">' + esc(m[1]) + '</span> ' +
+           '<span class="' + cls + '">' + esc(line.slice(m[0].length)) + '</span>';
+  }
+  return '<span class="' + cls + '">' + esc(line) + '</span>';
+}
+
+function pushLogLine(line) {
+  const div = document.createElement('div');
+  div.innerHTML = colorLogLine(line) || '&nbsp;';
+  logDone.appendChild(div);
+  trim(logDone, 600);
+}
+
+/** Полная очистка окна лога — при смене выбранного job'а. */
+function resetLog(jobId, label) {
+  logDone.innerHTML = '';
+  logLive.innerHTML = '';
+  logLine = '';
+  state.log = { id: jobId, offset: 0, pending: '', done: false, staticFetched: false };
+  $('log-job').textContent = label ? '· ' + label : '';
+}
+
+/**
+ * Выдаёт накопленный лог на экран.
+ * chars — сколько символов взять за раз; Infinity значит «всё сразу».
+ */
+function drainLog(chars) {
+  const st = state.log;
+  if (!st.pending) return;
+
+  // Отстали — выкидываем всё разом, иначе лог будет вечно догонять job
+  const take = Math.min(st.pending.length, chars);
+  const chunk = st.pending.slice(0, take);
+  st.pending = st.pending.slice(take);
+
+  for (const ch of chunk) {
+    if (ch === '\n') { pushLogLine(logLine); logLine = ''; }
+    else logLine += ch;
+  }
+  logLive.innerHTML = logLine
+    ? colorLogLine(logLine) + '<span class="cursor">&nbsp;</span>'
+    : '<span class="cursor">&nbsp;</span>';
+  autoScroll(logEl);
+}
+
+/** Плавная посимвольная выдача — пока вкладка на виду. */
+function logFrame() {
+  drainLog(CONFIG.typewriter && state.log.pending.length < 1500 ? 14 : Infinity);
+  requestAnimationFrame(logFrame);
+}
+requestAnimationFrame(logFrame);
+
+// Запасной привод. requestAnimationFrame в фоновой вкладке не вызывается вовсе,
+// а дашборд именно для того и нужен, чтобы висеть в фоне: без этого таймера
+// лог копился бы в буфере и появлялся только при возврате на вкладку.
+// Таймеры в фоне тоже придушены до ~1 раза в секунду, поэтому выводим пачкой.
+setInterval(() => { if (document.hidden) drainLog(Infinity); }, 1000);
+
+/* ------------------------------------------------------------------
+   Получение лога: сначала SSE, при любой осечке — обычный опрос
+   ------------------------------------------------------------------ */
+let sseBroken = false;   // один раз сломалось — больше не пробуем
+
+/** Разбор потока text/event-stream, пришедшего через fetch. */
+async function streamLog(jobId) {
+  const ctrl = new AbortController();
+  state.sseAbort = ctrl;
+
+  const res = await fetch(apiUrl('/w/' + CONFIG.workspace + '/jobs_u/getupdate_sse/' + jobId,
+                                 { running: true, log_offset: state.log.offset }), {
+    headers: { Authorization: 'Bearer ' + CONFIG.token, Accept: 'text/event-stream' },
+    credentials: 'omit',
+    signal: ctrl.signal
+  });
+  if (!res.ok || !res.body) { const e = new Error('HTTP ' + res.status); e.status = res.status; throw e; }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (state.log.id !== jobId) { ctrl.abort(); break; }   // выбрали другой job
+
+    buf += decoder.decode(value, { stream: true });
+    const blocks = buf.split('\n\n');
+    buf = blocks.pop();                                     // хвост без разделителя — ждём продолжения
+
+    for (const block of blocks) {
+      const data = block.split('\n')
+        .filter(l => l.startsWith('data:'))
+        .map(l => l.slice(5).trim())
+        .join('');
+      if (!data) continue;
+      try { applyUpdate(JSON.parse(data), jobId); } catch (_) { /* ping или не-JSON — молча пропускаем */ }
+    }
+  }
+}
+
+/** Один опрос getupdate — запасной путь, если SSE недоступен. */
+async function pollLogOnce(jobId) {
+  const upd = await api('/w/' + CONFIG.workspace + '/jobs_u/getupdate/' + jobId,
+                        { running: true, log_offset: state.log.offset });
+  applyUpdate(upd, jobId);
+}
+
+/** Общая обработка ответа getupdate / события SSE. */
+function applyUpdate(upd, jobId) {
+  if (!upd || state.log.id !== jobId) return;
+  if (upd.new_logs) state.log.pending += upd.new_logs;
+  if (typeof upd.log_offset === 'number') state.log.offset = upd.log_offset;
+  if (upd.flow_status) { state.flowStatus = upd.flow_status; renderFlow(); }
+  if (upd.completed) {
+    state.log.done = true;
+    // Лог этого job'а мы уже получили потоком — добирать его целиком не нужно,
+    // иначе после завершения он продублировался бы в окне
+    state.log.staticFetched = true;
+  }
+}
+
+// Логи завершённых job'ов длиннее этого обрезаем — показываем последнее
+const STATIC_LOG_LIMIT = 200000;
+
+/**
+ * Лог уже завершённого job'а.
+ * getupdate/SSE рассчитаны на живой job и по готовому ничего не отдают,
+ * поэтому здесь отдельный эндпоинт: он возвращает text/plain целиком.
+ * Нужен постоянно: когда в оркестраторе затишье, выбранный job — завершённый,
+ * и без этого окно лога было бы просто пустым.
+ */
+async function fetchStaticLog(jobId, isFlow) {
+  state.log.staticFetched = true;
+
+  // У флоу собственный лог почти пуст — всё содержательное лежит в шагах,
+  // поэтому для них берём склейку логов всех шагов с заголовками
+  let text = isFlow
+    ? await apiText('/w/' + CONFIG.workspace + '/jobs_u/get_flow_all_logs/' + jobId)
+    : await apiText('/w/' + CONFIG.workspace + '/jobs_u/get_logs/' + jobId,
+                    { remove_ansi_warnings: true });
+  if (state.log.id !== jobId) return;            // пока тянули, выбрали другой
+
+  if (text.length > STATIC_LOG_LIMIT) {
+    text = '--- показаны последние ' + Math.round(STATIC_LOG_LIMIT / 1024) + ' КБ лога ---\n'
+         + text.slice(-STATIC_LOG_LIMIT);
+  }
+  state.log.pending += text || '(лог пуст)\n';
+  state.log.done = true;
+}
+
+/** Цикл слежения за логом выбранного job'а. */
+async function logLoop() {
+  const jobId = state.log.id;
+  if (jobId && !DEMO) {
+    try {
+      const detail = state.jobDetail;
+      const finished = detail && detail.id === jobId && detail.type === 'CompletedJob';
+
+      if (finished) {
+        // Завершённый job: забираем лог один раз и больше не дёргаем
+        if (!state.log.staticFetched) await fetchStaticLog(jobId, FLOW_KINDS.has(detail.job_kind));
+      } else if (CONFIG.useSSE && !sseBroken) {
+        await streamLog(jobId);      // возвращается, когда поток закрыт (job завершился)
+      } else {
+        await pollLogOnce(jobId);
+      }
+    } catch (e) {
+      if (e.name !== 'AbortError') {
+        if (CONFIG.useSSE && !sseBroken) { sseBroken = true; }   // тихо переходим на опрос
+        else setConn('warn', 'лог недоступен: ' + (e.status ? 'HTTP ' + e.status : e.message));
+      }
+    }
+  }
+  setTimeout(logLoop, CONFIG.pollLogMs);
+}
+
+/* ==================================================================
+   ОКНО 2 — лента запусков
+   ================================================================== */
+const runsEl = $('runs');
+
+/** Нормализуем статус job'а из ответа API. */
+function statusOf(j) {
+  if (j.type === 'QueuedJob' || j.type === undefined && j.running !== undefined) {
+    if (j.canceled) return 'canceled';
+    return j.running ? 'running' : 'queued';
+  }
+  if (j.canceled) return 'canceled';
+  return j.success ? 'success' : 'failure';
+}
+const ICON = { running: '▶', queued: '·', success: '✔', failure: '✖', canceled: '⊘' };
+
+/** Добавляет строку в ленту. */
+function pushRun(job, status, note) {
+  const div = document.createElement('div');
+  div.className = 'run' + (job.id === state.selected ? ' sel' : '');
+  div.dataset.id = job.id;
+  div.innerHTML =
+    '<span class="t">' + hhmmss(new Date()) + '</span>' +
+    '<span class="ic st-' + status + '">' + ICON[status] + '</span>' +
+    '<span class="path st-' + status + '">' + esc(job.script_path || job.job_kind || 'inline') + '</span>' +
+    '<span class="d">' + esc(shortId(job.id)) + (note ? ' ' + note : '') + '</span>';
+  runsEl.appendChild(div);
+  trim(runsEl, 300);
+  autoScroll(runsEl);
+}
+
+// Клик по строке — «прицепиться» к этому job'у и смотреть его лог
+runsEl.addEventListener('click', ev => {
+  const row = ev.target.closest('.run');
+  if (!row) return;
+  const job = state.jobs.find(j => j.id === row.dataset.id);
+  state.pinned = true;
+  selectJob(job || { id: row.dataset.id }, true);
+  markSelectedRows();
+});
+
+/** Подсвечивает в ленте все строки выбранного job'а. */
+function markSelectedRows() {
+  for (const r of runsEl.querySelectorAll('.run')) {
+    r.classList.toggle('sel', r.dataset.id === state.selected);
+  }
+}
+
+const FLOW_KINDS = new Set(['flow', 'flowpreview', 'singlestepflow']);
+
+/**
+ * Догружает шаги флоу отдельным запросом.
+ * jobs/list отдаёт flow_status только у живых job'ов, у завершённых его нет —
+ * без этого запроса окно flow показывало бы карточку вместо шагов.
+ */
+async function fetchFlowStatus(jobId) {
+  try {
+    const d = await api('/w/' + CONFIG.workspace + '/jobs_u/get/' + jobId);
+    if (state.selected !== jobId || !d) return;
+    if (d.flow_status) state.flowStatus = d.flow_status;
+    state.jobDetail = Object.assign({}, state.jobDetail, d);
+    renderFlow();
+  } catch (_) { /* не критично: останется карточка job'а */ }
+}
+
+/** Переключение слежения на другой job. */
+function selectJob(job, manual) {
+  if (!job || state.selected === job.id) return;
+  state.selected = job.id;
+  state.jobDetail = job;
+  state.flowStatus = job.flow_status || null;
+  if (!DEMO && !job.flow_status && FLOW_KINDS.has(job.job_kind)) fetchFlowStatus(job.id);
+  if (state.sseAbort) { state.sseAbort.abort(); state.sseAbort = null; }
+  resetLog(job.id, shortId(job.id) + (job.script_path ? ' ' + job.script_path : ''));
+  markSelectedRows();
+  renderFlow();
+  if (manual) setConn(connEl.className || 'ok', 'слежу за ' + shortId(job.id) + ' (закреплено кликом)');
+}
+
+/* ==================================================================
+   ОКНО 3 — метрики и алерты
+   ================================================================== */
+const HIST_BARS = 40;
+const metricsEl = $('metrics'), histEl = $('histogram'), pathsEl = $('paths'), alertsEl = $('alerts');
+
+// Определения метрик: как считаем и где пороги «жёлтый/красный»
+const METRICS = [
+  { key: 'running',   name: 'RUNNING',  unit: '',    warn: 8,    crit: 20,   scale: 25    },
+  { key: 'queued',    name: 'QUEUED',   unit: '',    warn: 5,    crit: 25,   scale: 40    },
+  { key: 'failed',    name: 'FAILED',   unit: '',    warn: 1,    crit: 5,    scale: 10    },
+  { key: 'success',   name: 'SUCCESS',  unit: '',    warn: 1e9,  crit: 1e9,  scale: 60    },
+  { key: 'p50',       name: 'P50',      unit: 'ms',  warn: 5000, crit: 20000, scale: 30000 },
+  { key: 'p95',       name: 'P95',      unit: 'ms',  warn: 15000, crit: 60000, scale: 90000 }
+];
+
+function buildMetrics() {
+  METRICS.forEach((m, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td class="name">' + m.name + '</td>' +
+      '<td><div class="bar-track"><div class="bar-fill" id="bar' + i + '"></div></div></td>' +
+      '<td class="value" id="val' + i + '">—</td>';
+    metricsEl.appendChild(tr);
+  });
+  for (let i = 0; i < HIST_BARS; i++) {
+    const c = document.createElement('div');
+    c.className = 'col';
+    histEl.appendChild(c);
+    state.runningHistory.push(0);
+  }
+}
+
+const fmtVal = (v, unit) => unit === 'ms' ? dur(v) : String(v);
+
+function renderMetrics(vals) {
+  METRICS.forEach((m, i) => {
+    const v = vals[m.key] ?? 0;
+    const lvl = v >= m.crit ? 'lvl-crit' : v >= m.warn ? 'lvl-warn' : 'lvl-ok';
+    const bar = $('bar' + i), val = $('val' + i);
+    bar.style.width = Math.min(100, Math.round(v / m.scale * 100)) + '%';
+    bar.className = 'bar-fill ' + lvl;
+    val.textContent = fmtVal(v, m.unit);
+    val.className = 'value ' + { 'lvl-ok': 'c-ok', 'lvl-warn': 'c-warn', 'lvl-crit': 'c-crit' }[lvl];
+  });
+
+  // Гистограмма числа одновременно работающих job'ов
+  state.runningHistory.shift();
+  state.runningHistory.push(vals.running || 0);
+  const peak = Math.max(4, ...state.runningHistory);
+  const cols = histEl.children;
+  for (let i = 0; i < cols.length; i++) {
+    const v = state.runningHistory[i];
+    cols[i].style.height = Math.max(2, v / peak * 100) + '%';
+    cols[i].style.background = v >= 20 ? '#ff5f56' : v >= 8 ? '#ffbd2e' : '#27c93f';
+  }
+}
+
+/** Топ путей за окно наблюдения: что чаще всего гоняется и чем закончилось. */
+function renderPaths(jobs) {
+  const agg = new Map();
+  for (const j of jobs) {
+    const p = j.script_path || j.job_kind || 'inline';
+    const st = statusOf(j);
+    const cur = agg.get(p) || { n: 0, bad: 0, run: 0 };
+    cur.n++;
+    if (st === 'failure') cur.bad++;
+    if (st === 'running') cur.run++;
+    agg.set(p, cur);
+  }
+  // Держим список коротким: иначе верхние секции съедают всю высоту окна
+  // и на журнал алертов внизу не остаётся места
+  const top = [...agg.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 4);
+  pathsEl.innerHTML = top.length ? top.map(([p, s]) => {
+    const color = s.bad ? '#ff5f56' : s.run ? '#8be9fd' : '#27c93f';
+    return '<div class="path-row"><span class="led" style="background:' + color +
+           ';box-shadow:0 0 6px ' + color + '"></span>' +
+           '<span class="p">' + esc(p) + '</span><span class="n">' + s.n + '</span></div>';
+  }).join('') : '<div class="empty">нет данных</div>';
+}
+
+function pushAlert(level, text) {
+  const div = document.createElement('div');
+  div.innerHTML = '<span class="ts">' + hhmmss(new Date()) + '</span> ' +
+                  '<span class="' + level + '">[' + level.padEnd(5) + ']</span> ' +
+                  '<span class="msg">' + esc(text) + '</span>';
+  alertsEl.appendChild(div);
+  trim(alertsEl, 200);
+  autoScroll(alertsEl);
+}
+
+/* ==================================================================
+   ОКНО 4 — шаги флоу либо карточка job'а
+   ================================================================== */
+const flowEl = $('flow');
+const STEP_COLOR = {
+  Success: 'st-success', Failure: 'st-failure', InProgress: 'st-running',
+  WaitingForPriorSteps: 'st-queued', WaitingForEvents: 'st-canceled', WaitingForExecutor: 'st-queued'
+};
+
+function renderFlow() {
+  const fs = state.flowStatus, job = state.jobDetail;
+
+  // Флоу: рисуем шаги, текущий подсвечиваем
+  if (fs && Array.isArray(fs.modules) && fs.modules.length) {
+    const rows = fs.modules.map((m, i) => {
+      const cls = STEP_COLOR[m.type] || 'st-queued';
+      const iter = m.iterator && m.iterator.itered_len != null
+        ? (m.iterator.index ?? 0) + '/' + m.iterator.itered_len
+        : (m.flow_jobs ? (m.flow_jobs_success || []).filter(Boolean).length + '/' + m.flow_jobs.length : '');
+      return '<div class="step' + (i === fs.step ? ' cur' : '') + '">' +
+             '<span class="idx">' + i + '</span>' +
+             '<span class="id">' + esc(m.id || '—') + '</span>' +
+             (iter ? '<span class="iter">' + esc(iter) + '</span>' : '') +
+             '<span class="badge ' + cls + '">' + esc(m.type || '') + '</span>' +
+             '</div>';
+    }).join('');
+
+    const fail = fs.failure_module && fs.failure_module.type && fs.failure_module.type !== 'WaitingForPriorSteps'
+      ? '<div class="section-title">FAILURE HANDLER</div><div class="step"><span class="idx">!</span>' +
+        '<span class="id">' + esc(fs.failure_module.id || 'failure') + '</span>' +
+        '<span class="badge ' + (STEP_COLOR[fs.failure_module.type] || '') + '">' + esc(fs.failure_module.type) + '</span></div>'
+      : '';
+
+    const retry = fs.retry && fs.retry.fail_count
+      ? '<div class="kv"><span class="k">retries</span><span class="v st-canceled">' + fs.retry.fail_count + '</span></div>'
+      : '';
+
+    flowEl.innerHTML = '<div class="section-title">STEP ' + (fs.step ?? 0) + ' / ' + fs.modules.length + '</div>' +
+                       rows + retry + fail;
+    return;
+  }
+
+  // Не флоу — показываем карточку самого job'а
+  if (job) {
+    const st = statusOf(job);
+    const kv = (k, v, hl) => v === undefined || v === null || v === ''
+      ? '' : '<div class="kv"><span class="k">' + k + '</span><span class="v' + (hl ? ' hl' : '') + '">' + esc(v) + '</span></div>';
+    flowEl.innerHTML =
+      '<div class="section-title">JOB</div>' +
+      kv('id', job.id, true) +
+      kv('path', job.script_path) +
+      kv('kind', job.job_kind) +
+      kv('status', st) +
+      kv('by', job.created_by) +
+      kv('tag', job.tag) +
+      kv('schedule', job.schedule_path) +
+      kv('started', job.started_at ? new Date(job.started_at).toLocaleTimeString() : '') +
+      kv('duration', job.duration_ms != null ? dur(job.duration_ms)
+          : job.started_at ? dur(Date.now() - new Date(job.started_at).getTime()) + ' (идёт)' : '') +
+      kv('mem peak', job.mem_peak ? Math.round(job.mem_peak / 1024) + ' MB' : '') +
+      (job.args && Object.keys(job.args).length
+        ? '<div class="section-title">ARGS</div><pre class="args">' +
+          esc(JSON.stringify(job.args, null, 2).slice(0, 2000)) + '</pre>'
+        : '');
+    return;
+  }
+
+  flowEl.innerHTML = '<div class="empty">job не выбран</div>';
+}
+
+/* ==================================================================
+   ГЛАВНЫЙ ЦИКЛ — лента запусков + метрики
+   ================================================================== */
+function processJobs(jobs) {
+  state.jobs = jobs;
+
+  // 1. Ищем переходы состояний и пишем их в ленту (старые события — раньше)
+  for (let i = jobs.length - 1; i >= 0; i--) {
+    const j = jobs[i];
+    const st = statusOf(j);
+    const prev = state.known.get(j.id);
+    if (prev === st) continue;
+    state.known.set(j.id, st);
+
+    const note = j.duration_ms != null ? dur(j.duration_ms) : '';
+    if (prev === undefined && st === 'queued') pushRun(j, st);
+    else if (prev === undefined && st === 'running') pushRun(j, st);
+    else pushRun(j, st, note);
+
+    if (st === 'failure') pushAlert('ERROR', (j.script_path || 'job') + ' упал · ' + shortId(j.id));
+    else if (st === 'canceled') pushAlert('WARN', (j.script_path || 'job') + ' отменён · ' + shortId(j.id));
+    else if (st === 'success' && j.duration_ms > 60000)
+      pushAlert('WARN', (j.script_path || 'job') + ' долго: ' + dur(j.duration_ms));
+  }
+  if (state.known.size > 2000) state.known = new Map([...state.known].slice(-1000));
+
+  // 2. Метрики за окно наблюдения
+  const running = jobs.filter(j => statusOf(j) === 'running');
+  const queued  = jobs.filter(j => statusOf(j) === 'queued');
+  const done    = jobs.filter(j => j.type === 'CompletedJob');
+  const durs    = done.map(j => j.duration_ms).filter(v => typeof v === 'number').sort((a, b) => a - b);
+  const q = p => durs.length ? durs[Math.min(durs.length - 1, Math.floor(durs.length * p))] : 0;
+
+  renderMetrics({
+    running: running.length,
+    queued:  queued.length,
+    failed:  done.filter(j => statusOf(j) === 'failure').length,
+    success: done.filter(j => statusOf(j) === 'success').length,
+    p50: q(0.5),
+    p95: q(0.95)
+  });
+  renderPaths(jobs);
+
+  // 3. Автослежение. Важно: не перескакиваем на каждый новый job — иначе лог
+  //    сбрасывался бы каждые пару секунд. Держимся текущего, пока он работает,
+  //    и переключаемся только когда он завершился и есть другой running.
+  if (!state.pinned) {
+    const cur = jobs.find(j => j.id === state.selected);
+    const curAlive = cur && statusOf(cur) === 'running';
+    if (!curAlive) {
+      const target = running.find(j => !j.parent_job) || running[0] || (state.selected ? null : jobs[0]);
+      if (target && target.id !== state.selected) selectJob(target, false);
+    }
+  }
+
+  // 4. Обновляем карточку выбранного job'а свежими данными
+  const cur = jobs.find(j => j.id === state.selected);
+  if (cur) {
+    state.jobDetail = cur;
+    if (cur.flow_status) state.flowStatus = cur.flow_status;
+    renderFlow();
+  }
+}
+
+async function jobsLoop() {
+  try {
+    const jobs = DEMO ? demoJobs() : await api('/w/' + CONFIG.workspace + '/jobs/list', {
+      per_page: CONFIG.jobsPerPage,
+      is_skipped: false
+    });
+    processJobs(jobs);
+    if (!DEMO) {
+      const sel = state.selected ? ' · слежу за ' + shortId(state.selected) : '';
+      setConn('ok', CONFIG.workspace + ' · ' + jobs.length + ' job · ' +
+                    (sseBroken ? 'опрос' : CONFIG.useSSE ? 'sse' : 'опрос') + sel);
+    }
+  } catch (e) {
+    setConn('err', 'ошибка: ' + (e.status ? 'HTTP ' + e.status : e.message), explainError(e));
+  }
+  setTimeout(jobsLoop, CONFIG.pollJobsMs);
+}
+
+/* ==================================================================
+   ЭКРАН 2 — состояние воркспейса
+   ==================================================================
+   Здесь всё меняется редко, поэтому и опрашиваем редко: инвентарь и
+   триггеры раз в минуту, аудит раз в полминуты (он заметно медленнее
+   остальных эндпоинтов). И только пока экран открыт — в фоне не дёргаем.
+*/
+const wsEl = $('workspace'), trigEl = $('triggers'), auditEl = $('audit');
+
+const TRIGGER_KINDS = ['http', 'websocket', 'postgres', 'kafka', 'nats', 'mqtt', 'sqs', 'email'];
+const STATE_REFRESH_MS = 60000;   // инвентарь и триггеры
+const AUDIT_REFRESH_MS = 30000;   // аудит
+
+let stateLoaded = 0, auditLoaded = 0;
+
+/** Мягкий запрос: не даём одному сломанному эндпоинту уронить весь экран. */
+async function tryApi(path, params) {
+  try { return await api(path, params); } catch (_) { return null; }
+}
+
+// ---------- окно 5: инвентарь ----------
+function renderWorkspace(scripts, flows) {
+  const rows = [];
+  const line = (kind, o) => {
+    const bad = o.has_deploy_errors;
+    const cls = 'item' + (o.archived ? ' arch' : '') + (bad ? ' bad' : '');
+    return '<div class="' + cls + '" title="' + esc(o.summary || o.description || o.path) + '">' +
+      '<span class="k">' + kind + '</span>' +
+      '<span class="p">' + esc(o.path) + '</span>' +
+      (o.language ? '<span class="lang">' + esc(o.language) + '</span>' : '') +
+      (o.starred ? '<span class="flag st-canceled">★</span>' : '') +
+      (bad ? '<span class="flag st-failure">DEPLOY ERR</span>' : '') +
+      (o.archived ? '<span class="flag st-queued">ARCH</span>' : '') +
+      '</div>';
+  };
+
+  const bad = [...scripts, ...flows].filter(o => o.has_deploy_errors).length;
+  rows.push('<div class="counts">скриптов <b>' + scripts.length + '</b> · флоу <b>' + flows.length +
+            '</b>' + (bad ? ' · <span class="st-failure">с ошибками деплоя ' + bad + '</span>' : '') + '</div>');
+
+  rows.push('<div class="section-title">FLOWS</div>');
+  rows.push(flows.length ? flows.map(f => line('F', f)).join('') : '<div class="empty">нет флоу</div>');
+
+  rows.push('<div class="section-title">SCRIPTS</div>');
+  rows.push(scripts.length ? scripts.map(s => line('S', s)).join('') : '<div class="empty">нет скриптов</div>');
+
+  wsEl.innerHTML = rows.join('');
+}
+
+// ---------- окно 6: расписания и триггеры ----------
+function renderTriggers(schedules, triggers) {
+  const rows = [];
+  const active = Object.values(triggers).reduce((n, arr) => n + (arr ? arr.length : 0), 0);
+  const onSched = schedules.filter(s => s.enabled).length;
+
+  rows.push('<div class="counts">расписаний <b>' + schedules.length + '</b> (включено ' + onSched +
+            ') · внешних триггеров <b>' + active + '</b></div>');
+
+  rows.push('<div class="section-title">SCHEDULES</div>');
+  rows.push(schedules.length
+    ? schedules.map(s =>
+        '<div class="item">' +
+        '<span class="k ' + (s.enabled ? 'st-success' : 'st-queued') + '">' + (s.enabled ? '●' : '○') + '</span>' +
+        '<span class="p">' + esc(s.script_path || s.path) + '</span>' +
+        '<span class="lang">' + esc(s.schedule || '') + '</span>' +
+        '</div>').join('')
+    : '<div class="empty">расписаний нет — запуски идут вручную или из кода</div>');
+
+  rows.push('<div class="section-title">TRIGGERS</div>');
+  const parts = [];
+  for (const kind of TRIGGER_KINDS) {
+    const list = triggers[kind];
+    if (!list || !list.length) continue;          // пусто или эндпоинта нет на этом тарифе
+    parts.push(list.map(t =>
+      '<div class="item">' +
+      '<span class="k ' + (t.enabled === false ? 'st-queued' : 'st-success') + '">' +
+      (t.enabled === false ? '○' : '●') + '</span>' +
+      '<span class="p">' + esc(t.script_path || t.path || '') + '</span>' +
+      '<span class="lang">' + kind + '</span>' +
+      '</div>').join(''));
+  }
+  rows.push(parts.length ? parts.join('') : '<div class="empty">внешних триггеров нет</div>');
+
+  trigEl.innerHTML = rows.join('');
+}
+
+// ---------- окно 7: аудит ----------
+function renderAudit(entries) {
+  if (!entries || !entries.length) {
+    auditEl.innerHTML = '<div class="empty">записей нет</div>';
+    return;
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  auditEl.innerHTML = entries.map(e => {
+    const ts = String(e.timestamp || '');
+    // За сегодня показываем только время: дата съедает место, а путь важнее
+    const when = ts.slice(0, 10) === today ? ts.slice(11, 19) : ts.slice(5, 10) + ' ' + ts.slice(11, 16);
+    return '<div class="au" title="' + esc((e.operation || '') + ' · ' + (e.resource || '')) + '">' +
+      '<span class="t">' + esc(when) + '</span>' +
+      '<span class="who">' + esc(e.username || '') + '</span>' +
+      '<span class="op"><span class="ak-' + esc(e.action_kind || '') + '">' + esc(e.operation || '') + '</span> ' +
+      '<span class="res">' + esc(e.resource || '') + '</span></span>' +
+      '</div>';
+  }).join('');
+}
+
+/** Загрузка инвентаря и триггеров. */
+async function loadState() {
+  stateLoaded = Date.now();
+  if (DEMO) { renderWorkspace(demoScripts(), demoFlows()); renderTriggers(demoSchedules(), {}); return; }
+
+  const ws = CONFIG.workspace;
+  const [scripts, flows, schedules] = await Promise.all([
+    tryApi('/w/' + ws + '/scripts/list', { per_page: 200 }),
+    tryApi('/w/' + ws + '/flows/list', { per_page: 200 }),
+    tryApi('/w/' + ws + '/schedules/list', { per_page: 200 })
+  ]);
+  renderWorkspace(scripts || [], flows || []);
+
+  // Триггеров много видов, часть может быть недоступна — тянем параллельно и терпимо
+  const lists = await Promise.all(TRIGGER_KINDS.map(k =>
+    tryApi('/w/' + ws + '/' + k + '_triggers/list', { per_page: 100})));
+  const triggers = {};
+  TRIGGER_KINDS.forEach((k, i) => { triggers[k] = Array.isArray(lists[i]) ? lists[i] : null; });
+  renderTriggers(schedules || [], triggers);
+}
+
+/** Загрузка аудита. */
+async function loadAudit() {
+  auditLoaded = Date.now();
+  if (DEMO) { renderAudit(demoAudit()); return; }
+  const entries = await tryApi('/w/' + CONFIG.workspace + '/audit/list', { per_page: 40 });
+  renderAudit(entries || []);
+}
+
+/** Цикл второго экрана: работает только когда экран открыт. */
+function stateLoop() {
+  if (state.screen === 2) {
+    if (Date.now() - stateLoaded >= STATE_REFRESH_MS) loadState();
+    if (Date.now() - auditLoaded >= AUDIT_REFRESH_MS) loadAudit();
+  }
+  setTimeout(stateLoop, 5000);
+}
+
+/* ==================================================================
+   ЭКРАН 3 — запуск исследования
+   ==================================================================
+   Слева отрасли из okved_smb_2026.json (одна за раз, с необязательным
+   уточнением до конкретных ОКВЭД), справа регионы из regions_rf.json
+   (сколько угодно, сгруппированы по федеральным округам), по центру
+   дополнение к промпту и кнопка.
+
+   POST всегда уходит на /research своего же прокси, а тот уже решает,
+   куда переслать: в Windmill, на внешний адрес или никуда (заглушка).
+   Так адрес и токен не попадают в браузер, и CORS не мешает.
+*/
+const sectorsEl = $('sectors'), regListEl = $('reg-list'), promptEl = $('prompt'),
+      summaryEl = $('summary'), runBtn = $('run'), historyEl = $('history');
+
+const LS_PROMPT = 'wm.research.prompt';
+const LS_HISTORY = 'wm.research.history';
+
+const research = {
+  sectors: [],          // справочник отраслей
+  regions: [],          // справочник регионов
+  sector: null,         // выбранная отрасль (объект)
+  acts: new Set(),      // выбранные коды ОКВЭД; пусто = весь сектор
+  picked: new Set(),    // выбранные коды регионов
+  filter: '',           // строка поиска по регионам
+  busy: false,
+  history: []
+};
+
+/** Аккуратное чтение localStorage: повреждённые данные не должны ронять экран. */
+function lsGet(key, fallback) {
+  try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v); }
+  catch (_) { return fallback; }
+}
+function lsSet(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (_) {} }
+
+// ---------- отрасли ----------
+function renderSectors() {
+  sectorsEl.innerHTML = research.sectors.map(s => {
+    const sel = research.sector && research.sector.id === s.id;
+    let html = '<div class="sector' + (sel ? ' sel' : '') + '" data-id="' + esc(s.id) + '">' +
+      '<span class="nm">' + esc(s.name) + '</span>' +
+      '<span class="cnt">' + s.activities.length + '</span></div>';
+
+    // Виды деятельности показываем только у выбранной отрасли
+    if (sel) {
+      html += '<div class="acts">' + s.activities.map(a => {
+        const on = research.acts.has(a.code);
+        const regs = (a.regulation || []).map(r =>
+          '<span class="reg reg-' + esc(r) + '">' + esc(r) + '</span>').join('');
+        return '<label class="act' + (on ? ' on' : '') + '" title="' + esc(a.name) + '">' +
+          '<input type="checkbox" data-code="' + esc(a.code) + '"' + (on ? ' checked' : '') + '>' +
+          '<span class="code">' + esc(a.code) + '</span>' +
+          '<span class="nm">' + esc(a.name) + '</span>' + regs + '</label>';
+      }).join('') + '</div>';
+    }
+    return html;
+  }).join('');
+  $('sec-count').textContent = research.sector
+    ? '· ' + (research.acts.size || research.sector.activities.length) + ' видов'
+    : '· ' + research.sectors.length;
+}
+
+sectorsEl.addEventListener('click', ev => {
+  const act = ev.target.closest('.act');
+  if (act) {                                   // отметили конкретный ОКВЭД
+    const code = act.querySelector('input').dataset.code;
+    const box = act.querySelector('input');
+    // click по label уже переключил чекбокс — читаем итоговое состояние
+    setTimeout(() => {
+      if (box.checked) research.acts.add(code); else research.acts.delete(code);
+      renderSectors(); renderSummary();
+    }, 0);
+    return;
+  }
+  const sec = ev.target.closest('.sector');
+  if (!sec) return;
+  const found = research.sectors.find(s => s.id === sec.dataset.id);
+  // Повторный клик по выбранной отрасли снимает выбор
+  research.sector = research.sector && research.sector.id === found.id ? null : found;
+  research.acts.clear();
+  renderSectors(); renderSummary();
+});
+
+// ---------- регионы ----------
+const DISTRICTS = ['ЦФО', 'СЗФО', 'ЮФО', 'СКФО', 'ПФО', 'УФО', 'СФО', 'ДФО'];
+
+function regionsOf(dist) {
+  const f = research.filter.toLowerCase();
+  return research.regions.filter(r => (r.federal_district || '') === dist &&
+    (!f || r.name.toLowerCase().includes(f) || (r.center || '').toLowerCase().includes(f)));
+}
+
+function renderRegions() {
+  regListEl.innerHTML = DISTRICTS.map(d => {
+    const list = regionsOf(d);
+    if (!list.length) return '';
+    const on = list.filter(r => research.picked.has(r.code)).length;
+    return '<div class="district">' +
+      '<div class="dh" data-district="' + esc(d) + '">' +
+        '<span class="dn">' + esc(d) + '</span>' +
+        '<span>' + on + '/' + list.length + '</span>' +
+      '</div>' +
+      list.map(r => {
+        const sel = research.picked.has(r.code);
+        return '<label class="region' + (sel ? ' on' : '') + '">' +
+          '<input type="checkbox" data-code="' + esc(r.code) + '"' + (sel ? ' checked' : '') + '>' +
+          '<span class="code">' + esc(r.code) + '</span>' +
+          '<span class="nm">' + esc(r.name) + '</span>' +
+          (r.status === 'disputed' ? '<span class="disp" title="в справочнике помечен как disputed">!</span>' : '') +
+          '<span class="ctr">' + esc(r.center || '') + '</span></label>';
+      }).join('') +
+      '</div>';
+  }).join('') || '<div class="empty">ничего не найдено</div>';
+
+  $('reg-count').textContent = '· ' + research.picked.size + '/' + research.regions.length;
+}
+
+regListEl.addEventListener('click', ev => {
+  const head = ev.target.closest('.dh');
+  if (head) {                                   // клик по округу — отметить/снять весь
+    const list = regionsOf(head.dataset.district);
+    const allOn = list.every(r => research.picked.has(r.code));
+    list.forEach(r => allOn ? research.picked.delete(r.code) : research.picked.add(r.code));
+    renderRegions(); renderSummary();
+    return;
+  }
+  const box = ev.target.closest('.region') && ev.target.closest('.region').querySelector('input');
+  if (!box) return;
+  setTimeout(() => {
+    if (box.checked) research.picked.add(box.dataset.code); else research.picked.delete(box.dataset.code);
+    renderRegions(); renderSummary();
+  }, 0);
+});
+
+$('reg-search').addEventListener('input', ev => { research.filter = ev.target.value.trim(); renderRegions(); });
+$('reg-all').addEventListener('click', () => {
+  // Спорные субъекты в «выбрать все» не попадают — только осознанным кликом
+  research.regions.forEach(r => { if (r.status !== 'disputed') research.picked.add(r.code); });
+  renderRegions(); renderSummary();
+});
+$('reg-none').addEventListener('click', () => { research.picked.clear(); renderRegions(); renderSummary(); });
+
+// ---------- сводка и кнопка ----------
+function renderSummary() {
+  const s = research.sector, n = research.picked.size;
+  const acts = s ? (research.acts.size || s.activities.length) : 0;
+  const split = CONFIG.splitByRegion && n > 1;
+
+  const parts = [];
+  parts.push(s ? 'отрасль <b>' + esc(s.name) + '</b>' : '<span class="warn">отрасль не выбрана</span>');
+  if (s) parts.push('видов <b>' + acts + '</b>' + (research.acts.size ? '' : ' (весь сектор)'));
+  parts.push(n ? 'регионов <b>' + n + '</b>' : '<span class="warn">регионы не выбраны</span>');
+  if (split) parts.push('запросов <b>' + n + '</b>');
+
+  summaryEl.innerHTML = parts.join(' · ');
+  runBtn.disabled = research.busy || !s || !n;
+}
+
+function renderHistory() {
+  historyEl.innerHTML = research.history.map(h =>
+    '<div class="hi" title="' + esc(h.detail || '') + '">' +
+    '<span class="t">' + esc(h.time) + '</span>' +
+    '<span class="s">' + esc(h.summary) + '</span>' +
+    '<span class="r st-' + esc(h.level) + '">' + esc(h.result) + '</span></div>').join('') ||
+    '<div class="empty">запусков ещё не было</div>';
+}
+
+/** Собирает тело запроса. regions — уже отфильтрованный список объектов. */
+function buildPayload(regions) {
+  const s = research.sector;
+  // Ничего не уточнили — значит весь сектор. Отправляем список целиком, а не
+  // пустой массив: получателю не придётся догадываться и держать справочник у себя.
+  const narrowed = research.acts.size > 0;
+  const acts = narrowed ? s.activities.filter(a => research.acts.has(a.code)) : s.activities;
+  return {
+    request_id: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())),
+    created_at: new Date().toISOString(),
+    sector: { id: s.id, name: s.name },
+    all_activities: !narrowed,     // true = взят весь сектор, а не выбранные вручную коды
+    activities: acts.map(a => ({
+      code: a.code, name: a.name,
+      regulation: a.regulation || [], org_form: a.org_form || [], notes: a.notes || null
+    })),
+    regions: regions.map(r => ({
+      code: r.code, name: r.name, type: r.type,
+      center: r.center, federal_district: r.federal_district, status: r.status
+    })),
+    prompt_suffix: promptEl.value.trim(),
+    meta: { source: 'windmill-monitor', workspace: CONFIG.workspace, regions_total: research.regions.length }
+  };
+}
+
+async function sendResearch() {
+  if (research.busy) return;
+  research.busy = true;
+  runBtn.classList.add('busy');
+  runBtn.textContent = 'ОТПРАВКА...';
+  renderSummary();
+
+  const chosen = research.regions.filter(r => research.picked.has(r.code));
+  // split_by_region: по запросу на субъект вместо одного со списком
+  const batches = CONFIG.splitByRegion ? chosen.map(r => [r]) : [chosen];
+
+  let ok = 0, failed = 0, lastJob = null, lastMode = '', lastErr = '';
+
+  for (const batch of batches) {
+    try {
+      const res = await fetch('/research', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildPayload(batch))
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { failed++; lastErr = 'HTTP ' + res.status + ' ' + (data.error || ''); continue; }
+      ok++;
+      lastMode = data.mode || '';
+      if (data.job_id) lastJob = data.job_id;
+    } catch (e) {
+      failed++;
+      // Страницу открыли без прокси — тогда слать просто некуда
+      lastErr = location.protocol === 'file:' ? 'нет прокси (открыто как file://)' : e.message;
+    }
+  }
+
+  const s = research.sector;
+  const entry = {
+    time: hhmmss(new Date()),
+    summary: s.name + ' · ' + chosen.length + ' рег.' + (lastMode ? ' · ' + lastMode : ''),
+    result: failed ? (ok ? ok + '/' + batches.length : 'ошибка') : (lastMode === 'stub' ? 'заглушка' : 'ok'),
+    level: failed ? (ok ? 'canceled' : 'failure') : (lastMode === 'stub' ? 'queued' : 'success'),
+    detail: lastErr || (lastJob ? 'job ' + lastJob : '')
+  };
+  research.history.unshift(entry);
+  research.history = research.history.slice(0, 40);
+  lsSet(LS_HISTORY, research.history);
+  renderHistory();
+
+  research.busy = false;
+  runBtn.classList.remove('busy');
+  runBtn.textContent = 'ЗАПУСК ИССЛЕДОВАНИЯ';
+  renderSummary();
+
+  // Windmill вернул job — сразу цепляемся к нему и уходим смотреть live
+  if (lastJob) {
+    state.pinned = true;
+    selectJob({ id: lastJob, script_path: CONFIG.researchRunnable || 'research', job_kind: 'flow' }, true);
+    switchScreen(1);
+  }
+}
+
+runBtn.addEventListener('click', sendResearch);
+promptEl.addEventListener('input', () => lsSet(LS_PROMPT, promptEl.value));
+
+/** Загрузка справочников. Без них экран нерабочий, поэтому говорим об этом прямо. */
+async function loadResearchData() {
+  research.history = lsGet(LS_HISTORY, []) || [];
+  promptEl.value = lsGet(LS_PROMPT, '') || '';
+  renderHistory();
+
+  try {
+    const [okved, regions] = await Promise.all([
+      fetch('okved_smb_2026.json', { cache: 'no-store' }).then(r => r.json()),
+      fetch('regions_rf.json', { cache: 'no-store' }).then(r => r.json())
+    ]);
+    research.sectors = okved.sectors || [];
+    research.regions = regions.regions || [];
+  } catch (e) {
+    showBlocker('справочники <code>okved_smb_2026.json</code> и <code>regions_rf.json</code>');
+    sectorsEl.innerHTML = '<div class="empty">не прочитались справочники okved_smb_2026.json / regions_rf.json — ' +
+      'нужен запуск через windmill-proxy.go</div>';
+    regListEl.innerHTML = '<div class="empty">—</div>';
+    return;
+  }
+  renderSectors();
+  renderRegions();
+  renderSummary();
+}
+
+/* ==================================================================
+   ЭКРАН 4 — монитор Harvester по контракту TASK-001
+   ==================================================================
+   Данные приходят только с трёх маршрутов своего же прокси:
+   /api/harvester/snapshot, /companies, /company. В браузере нет ни
+   строки подключения, ни обращений к *.supabase.co — соединение с
+   PostgreSQL живёт в прокси под ролью brandts_monitor.
+
+   Главное правило контракта: 0, null и not_implemented — разные вещи.
+   Ниже они и рисуются по-разному, подменять их запрещено.
+*/
+const CONTRACT_VERSION = '1.0.0';
+const SNAPSHOT_REFRESH_MS = 15000;
+
+const harvEl = $('harvester'), dbMetaEl = $('db-meta'), coListEl = $('co-list'),
+      companyEl = $('company');
+
+const db = {
+  snapshot: null,
+  companies: null,
+  company: null,
+  selected: null,
+  search: '',
+  limit: 50,
+  offset: 0,
+  loadedAt: 0,
+  state: 'loading'      // loading | success | empty | partial | error | offline
+};
+
+/** Число с разделением тысяч; null и undefined сюда не попадают. */
+const num = n => typeof n === 'number' ? n.toLocaleString('ru-RU') : String(n);
+
+/**
+ * Значение показателя. Возвращает html и класс.
+ * null -> прочерк, not_implemented -> метка, 0 -> честный ноль.
+ */
+function metric(value, opts = {}) {
+  if (value === null || value === undefined) return '<div class="v null">—</div>';
+  if (value === 'not_implemented') return '<div class="v ni">НЕ РЕАЛИЗОВАНО</div>';
+  const suffix = opts.suffix || '';
+  return '<div class="v">' + esc(num(value)) + esc(suffix) + '</div>';
+}
+
+function kpi(label, value, opts = {}) {
+  return '<div class="kpi ' + (opts.cls || '') + '">' +
+    '<div class="k">' + esc(label) + '</div>' + metric(value, opts) +
+    (opts.sub ? '<div class="sub">' + esc(opts.sub) + '</div>' : '') + '</div>';
+}
+
+/** Время в читаемом виде; null остаётся прочерком. */
+function when(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const p = n => String(n).padStart(2, '0');
+  return p(d.getDate()) + '.' + p(d.getMonth() + 1) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
+/** Сколько прошло с момента — для «последний успех N назад». */
+function ago(iso) {
+  if (!iso) return null;
+  const ms = Date.now() - new Date(iso).getTime();
+  if (Number.isNaN(ms)) return null;
+  if (ms < 60000) return Math.round(ms / 1000) + ' сек назад';
+  if (ms < 3600000) return Math.round(ms / 60000) + ' мин назад';
+  if (ms < 86400000) return Math.round(ms / 3600000) + ' ч назад';
+  return Math.round(ms / 86400000) + ' дн назад';
+}
+
+/** Полоска состояния: живые данные или фикстуры, когда собран снимок. */
+function renderDbMeta() {
+  const s = db.snapshot;
+  const parts = [];
+
+  if (db.state === 'error' || db.state === 'offline') {
+    parts.push('<span class="err">' + esc(db.error || 'нет связи с монитором') + '</span>');
+  } else if (s) {
+    parts.push(s.source === 'database'
+      ? '<span class="lv">живые данные</span>'
+      : '<span class="fx">ФИКСТУРЫ · monitor_database_url не задан</span>');
+    parts.push('снимок ' + esc(when(s.generated_at) || '—'));
+    if (db.loadedAt) parts.push('обновлено ' + hhmmss(new Date(db.loadedAt)));
+    // Расхождение версии контракта — повод сказать вслух, а не молча рисовать
+    if (s.schema_version && s.schema_version !== CONTRACT_VERSION) {
+      parts.push('<span class="err">schema_version ' + esc(s.schema_version) +
+                 ' ≠ ' + CONTRACT_VERSION + '</span>');
+    }
+  } else {
+    parts.push('загрузка...');
+  }
+  dbMetaEl.innerHTML = parts.join(' · ');
+}
+
+/** Окно 11: статус, воронка и десять обязательных показателей первого экрана. */
+function renderHarvester() {
+  const s = db.snapshot;
+  if (!s) {
+    harvEl.innerHTML = '<div class="empty">' +
+      (db.state === 'error' ? esc(db.error || 'ошибка') : 'загрузка снимка...') + '</div>';
+    return;
+  }
+
+  const sys = s.system || {}, disc = s.discovery || {}, comp = s.completeness || {},
+        eq = s.entity_quality || {}, costs = s.costs || {}, errs = s.errors || {},
+        scope = s.scope || {}, runs = s.runs || {};
+
+  const pct = o => o && typeof o.percent === 'number' ? o.percent : null;
+  const cnt = o => o && typeof o.count === 'number' ? o.count : null;
+
+  const html = [];
+
+  // Статус системы
+  html.push('<div class="kv"><span class="k">статус</span><span class="v">' +
+    '<span class="badge b-' + esc(sys.harvester_status || 'unknown') + '">' +
+    esc((sys.harvester_status || 'unknown').toUpperCase()) + '</span>' +
+    (sys.current_stage ? ' <span class="badge b-ni">' + esc(sys.current_stage) + '</span>' : '') +
+    '</span></div>');
+  html.push('<div class="kv"><span class="k">последний успех</span><span class="v">' +
+    esc(when(sys.last_success_at) || '—') +
+    (ago(sys.last_success_at) ? ' <span style="color:#555">· ' + esc(ago(sys.last_success_at)) + '</span>' : '') +
+    '</span></div>');
+  html.push('<div class="kv"><span class="k">проект</span><span class="v">' +
+    esc(scope.project_name || '—') + (scope.region ? ' · ' + esc(scope.region) : '') + '</span></div>');
+  // null здесь именно null: подставлять ноль контракт запрещает
+  const dash = v => v === null || v === undefined ? '<span style="color:#555">—</span>' : esc(num(v));
+  html.push('<div class="kv"><span class="k">города</span><span class="v">' +
+    dash(scope.cities_completed) + ' из ' + dash(scope.cities_planned) +
+    ' · в работе ' + dash(scope.cities_started) + '</span></div>');
+
+  // Воронка: контракт требует разделять эти четыре величины визуально
+  html.push('<div class="section-title">ВОРОНКА</div><div class="funnel">');
+  [['сырые записи', disc.candidate_records], ['предв. уникальные', disc.estimated_unique_companies],
+   ['канонические', disc.canonical_companies], ['готовы к продажам', disc.commercially_ready]
+  ].forEach(([label, v]) => {
+    const isNull = v === null || v === undefined;
+    html.push('<div class="st"><div class="n' + (isNull || v === 0 ? ' zero' : '') + '">' +
+      (isNull ? '—' : esc(num(v))) + '</div><div class="l">' + esc(label) + '</div></div>');
+  });
+  html.push('</div>');
+
+  // Десять обязательных показателей раздела 9
+  html.push('<div class="section-title">ПОКАЗАТЕЛИ</div><div class="kpis">');
+  html.push(kpi('прирост за 24ч', disc.new_candidates_last_24h));
+  html.push(kpi('средний confidence', typeof disc.average_confidence === 'number'
+    ? Math.round(disc.average_confidence * 100) : null, { suffix: '%' }));
+  html.push(kpi('с телефоном', cnt(comp.with_phone), { sub: pct(comp.with_phone) === null ? '' : pct(comp.with_phone) + '%' }));
+  html.push(kpi('с сайтом', cnt(comp.with_website), { sub: pct(comp.with_website) === null ? '' : pct(comp.with_website) + '%' }));
+  html.push(kpi('с адресом', cnt(comp.with_address), { sub: pct(comp.with_address) === null ? '' : pct(comp.with_address) + '%' }));
+  html.push(kpi('вероятные дубли', eq.possible_duplicates,
+    { cls: eq.possible_duplicates ? 'warn' : '' }));
+  html.push(kpi('стоимость сегодня', costs.today, { suffix: ' ' + (costs.currency || 'USD') }));
+  html.push(kpi('стоимость за месяц', costs.month, { suffix: ' ' + (costs.currency || 'USD') }));
+  html.push(kpi('ошибки за 24ч', errs.last_24h, { cls: errs.last_24h ? 'crit' : '' }));
+  html.push(kpi('запуски', runs.total, { sub: 'выполнено ' + num(runs.completed ?? 0) +
+    ', упало ' + num(runs.failed ?? 0) }));
+  html.push('</div>');
+
+  // Контуры конвейера: not_implemented показываем как есть
+  html.push('<div class="section-title">КОНТУРЫ</div>');
+  const stageNames = { discovery: 'discovery', enrichment: 'enrichment',
+                       entity_resolution: 'entity resolution', commercial_scoring: 'commercial scoring' };
+  for (const [key, label] of Object.entries(stageNames)) {
+    const p = (s.pipeline || {})[key];
+    if (!p) continue;
+    const st = p.status || 'unknown';
+    html.push('<div class="kv"><span class="k">' + esc(label) + '</span><span class="v">' +
+      '<span class="badge b-' + (st === 'not_implemented' ? 'ni' : esc(st)) + '">' +
+      esc(st === 'not_implemented' ? 'не реализовано' : st) + '</span>' +
+      ' <span style="color:#555">выполнено ' + esc(num(p.completed ?? 0)) +
+      ', упало ' + esc(num(p.failed ?? 0)) + '</span></span></div>');
+  }
+
+  harvEl.innerHTML = html.join('');
+}
+
+/** Окно 12: список компаний. */
+function renderCompanies() {
+  const c = db.companies;
+  if (!c) {
+    coListEl.innerHTML = '<div class="empty">загрузка...</div>';
+    return;
+  }
+  if (!c.items || !c.items.length) {
+    coListEl.innerHTML = '<div class="empty">ничего не найдено</div>';
+  } else {
+    coListEl.innerHTML = c.items.map(it => {
+      const isOrg = it.record_type === 'organization';
+      const conf = typeof it.confidence === 'number' ? Math.round(it.confidence * 100) + '%' : '—';
+      return '<div class="co' + (it.id === db.selected ? ' sel' : '') + '" data-id="' + esc(it.id) + '">' +
+        // record_type обязателен по контракту: не выдаём кандидатов за компании
+        '<span class="rt ' + (isOrg ? 'org' : 'cand') + '">' + (isOrg ? 'ORG' : 'CAND') + '</span>' +
+        '<span class="nm">' + esc(it.name) + '</span>' +
+        '<span class="ct">' + esc(it.city || '—') + '</span>' +
+        '<span class="cf" style="color:' + (typeof it.confidence === 'number' && it.confidence >= 0.9
+          ? '#27c93f' : '#ffbd2e') + '">' + esc(conf) + '</span></div>';
+    }).join('');
+  }
+
+  const from = c.total ? c.offset + 1 : 0;
+  const to = Math.min(c.offset + c.limit, c.total);
+  $('co-page').textContent = from + '–' + to + ' из ' + c.total;
+  $('co-count').textContent = '· ' + c.total;
+  $('co-prev').disabled = c.offset <= 0;
+  $('co-next').disabled = to >= c.total;
+}
+
+/** Окно 13: карточка компании. */
+function renderCompany() {
+  const wrap = db.company;
+  if (!wrap) {
+    companyEl.innerHTML = '<div class="empty">компания не выбрана</div>';
+    return;
+  }
+  const c = wrap.company || {};
+  const id = c.identity || {}, st = c.status || {}, ct = c.contacts || {},
+        en = c.enrichment_progress || {}, ca = c.commercial_assessment || {},
+        co = c.costs || {}, ts = c.timestamps || {};
+
+  const kv = (k, v, cls) => '<div class="kv"><span class="k">' + esc(k) + '</span>' +
+    '<span class="v ' + (cls || '') + '">' + (v === null || v === undefined || v === ''
+      ? '<span style="color:#555">—</span>' : esc(String(v))) + '</span></div>';
+
+  const html = [];
+  html.push('<div class="section-title">IDENTITY</div>');
+  html.push(kv('название', id.canonical_name));
+  html.push(kv('тип записи', id.record_type === 'organization' ? 'организация' : 'кандидат'));
+  html.push(kv('ключ', id.identity_key, 'hl'));
+  html.push(kv('алиасы', (id.aliases || []).join(', ')));
+  html.push(kv('деятельность', id.primary_activity));
+  html.push(kv('ИНН', id.inn));
+
+  html.push('<div class="section-title">СТАТУС</div>');
+  html.push(kv('бизнес', st.business_status));
+  html.push(kv('исследование', st.research_status));
+  html.push(kv('верификация', st.verification_status));
+  html.push(kv('confidence', typeof st.confidence === 'number' ? Math.round(st.confidence * 100) + '%' : null));
+  html.push(kv('заполненность', typeof st.completeness_percent === 'number' ? st.completeness_percent + '%' : null));
+
+  const phones = (ct.phones || []).map(p => p.value).join(', ');
+  const emails = (ct.emails || []).map(p => p.value).join(', ');
+  html.push('<div class="section-title">КОНТАКТЫ</div>');
+  html.push(kv('телефоны', phones));
+  html.push(kv('почта', emails));
+
+  (c.locations || []).forEach(l => {
+    html.push('<div class="section-title">АДРЕС</div>');
+    html.push(kv('адрес', [l.address, l.city, l.district].filter(Boolean).join(', ')));
+    html.push(kv('координаты', l.latitude && l.longitude ? l.latitude + ', ' + l.longitude : null));
+  });
+
+  const ev = c.evidence || [];
+  html.push('<div class="section-title">ДОКАЗАТЕЛЬСТВА · ' + ev.length + '</div>');
+  html.push(ev.length ? ev.map(e =>
+    '<div class="ev"><div class="q">«' + esc(e.quote || '') + '»</div>' +
+    '<div class="src">' + esc(e.source_name || '') + ' · ' + esc(e.fact_key || '') + '</div>' +
+    '<div class="meta">' + esc(when(e.observed_at) || '') +
+    (typeof e.confidence === 'number' ? ' · ' + Math.round(e.confidence * 100) + '%' : '') +
+    '</div></div>').join('') : '<div class="empty">нет</div>');
+
+  const dups = c.duplicate_candidates || [];
+  if (dups.length) {
+    html.push('<div class="section-title">ВОЗМОЖНЫЕ ДУБЛИ</div>');
+    html.push(dups.map(d => '<div class="kv"><span class="k">' +
+      (typeof d.confidence === 'number' ? Math.round(d.confidence * 100) + '%' : '—') +
+      '</span><span class="v">' + esc(d.name || '') + ' <span style="color:#555">· ' +
+      esc((d.match_signals || []).join(', ')) + ' · ' + esc(d.review_status || '') +
+      '</span></span></div>').join(''));
+  }
+
+  // not_implemented показываем меткой, а не нулями
+  html.push('<div class="section-title">ENRICHMENT</div>');
+  html.push('<div class="kv"><span class="k">статус</span><span class="v">' +
+    '<span class="badge b-' + (en.status === 'not_implemented' ? 'ni' : 'active') + '">' +
+    esc(en.status === 'not_implemented' ? 'не реализовано' : (en.status || 'unknown')) + '</span></span></div>');
+  if ((en.missing_fields || []).length) html.push(kv('не хватает', en.missing_fields.join(', ')));
+
+  html.push('<div class="section-title">КОММЕРЧЕСКАЯ ОЦЕНКА</div>');
+  html.push('<div class="kv"><span class="k">статус</span><span class="v">' +
+    '<span class="badge b-' + (ca.status === 'not_implemented' ? 'ni' : 'active') + '">' +
+    esc(ca.status === 'not_implemented' ? 'не реализовано' : (ca.status || 'unknown')) + '</span></span></div>');
+  html.push(kv('lead score', ca.lead_score));
+
+  html.push('<div class="section-title">СТОИМОСТЬ И ВРЕМЯ</div>');
+  html.push(kv('всего', typeof co.total === 'number' ? co.total + ' ' + (co.currency || 'USD') : null));
+  html.push(kv('первый раз', when(ts.first_seen_at)));
+  html.push(kv('последний раз', when(ts.last_seen_at)));
+
+  companyEl.innerHTML = html.join('');
+}
+
+/* ------------------------------------------------------------------
+   Запросы к трём маршрутам BFF
+   ------------------------------------------------------------------ */
+async function bff(route, body) {
+  const res = await fetch('/api/harvester/' + route, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {})
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    const e = new Error((data && data.error && data.error.message) || ('HTTP ' + res.status));
+    e.code = data && data.error && data.error.code;
+    e.status = res.status;
+    throw e;
+  }
+  return data;
+}
+
+async function loadSnapshot() {
+  try {
+    db.snapshot = await bff('snapshot', {});
+    db.loadedAt = Date.now();
+    db.state = 'success';
+    db.error = '';
+  } catch (e) {
+    db.state = e.status ? 'error' : 'offline';
+    db.error = e.code ? e.code + ': ' + e.message : e.message;
+  }
+  renderDbMeta();
+  renderHarvester();
+}
+
+// Счётчик запросов списка: с живой базой соседние запросы будут разной
+// длительности, и старый ответ не должен затирать более свежий.
+let coSeq = 0;
+
+async function loadCompanies() {
+  const seq = ++coSeq;
+  try {
+    const data = await bff('companies', {
+      p_project_id: null, p_city: null, p_activity: null, p_status: null,
+      p_search: db.search || null, p_sort: 'last_seen_at_desc',
+      p_limit: db.limit, p_offset: db.offset
+    });
+    if (seq !== coSeq) return;          // пока ждали, ушёл более свежий запрос
+    db.companies = data;
+  } catch (e) {
+    if (seq !== coSeq) return;
+    coListEl.innerHTML = '<div class="empty">' + esc(e.message) + '</div>';
+    return;
+  }
+  renderCompanies();
+}
+
+async function loadCompany(id) {
+  db.selected = id;
+  renderCompanies();
+  companyEl.innerHTML = '<div class="empty">загрузка...</div>';
+  try {
+    const data = await bff('company', { p_company_id: id });
+    if (db.selected !== id) return;     // выбрали другую компанию, этот ответ уже не нужен
+    db.company = data;
+  } catch (e) {
+    if (db.selected !== id) return;
+    companyEl.innerHTML = '<div class="empty">' +
+      (e.status === 404 ? 'компания не найдена' : esc(e.message)) + '</div>';
+    return;
+  }
+  renderCompany();
+}
+
+// ---------- события ----------
+coListEl.addEventListener('click', ev => {
+  const row = ev.target.closest('.co');
+  if (row) loadCompany(row.dataset.id);
+});
+$('co-search').addEventListener('input', ev => {
+  db.search = ev.target.value.trim();
+  db.offset = 0;
+  clearTimeout($('co-search')._t);
+  $('co-search')._t = setTimeout(loadCompanies, 300);   // не дёргаем базу на каждую букву
+});
+$('co-reload').addEventListener('click', () => { loadSnapshot(); loadCompanies(); });
+$('co-prev').addEventListener('click', () => {
+  db.offset = Math.max(0, db.offset - db.limit); loadCompanies();
+});
+$('co-next').addEventListener('click', () => { db.offset += db.limit; loadCompanies(); });
+
+/** Снимок обновляется сам, пока вкладка открыта — без перезагрузки страницы. */
+function dbLoop() {
+  if (state.screen === 4 && Date.now() - db.loadedAt >= SNAPSHOT_REFRESH_MS) loadSnapshot();
+  setTimeout(dbLoop, 5000);
+}
+
+/* ------------------------------------------------------------------
+   Переключатель экранов
+   ------------------------------------------------------------------ */
+function switchScreen(n) {
+  if (n < 1 || n > 4) return;
+  state.screen = n;
+  for (const s of document.querySelectorAll('.screen')) s.classList.toggle('active', s.id === 'screen-' + n);
+  for (const b of document.querySelectorAll('.sw')) b.classList.toggle('active', b.dataset.screen === String(n));
+
+  // Открыли второй экран — подтягиваем данные сразу, если давно не обновляли
+  if (n === 2) {
+    if (Date.now() - stateLoaded >= STATE_REFRESH_MS) loadState();
+    if (Date.now() - auditLoaded >= AUDIT_REFRESH_MS) loadAudit();
+  }
+}
+
+for (const b of document.querySelectorAll('.sw')) {
+  b.addEventListener('click', () => switchScreen(Number(b.dataset.screen)));
+}
+// Клавиши 1 и 2 — быстрое переключение
+document.addEventListener('keydown', ev => {
+  if (ev.target.tagName === 'INPUT' || ev.target.tagName === 'TEXTAREA') return;
+  if (ev.key === '1') switchScreen(1);
+  if (ev.key === '2') switchScreen(2);
+  if (ev.key === '3') switchScreen(3);
+  if (ev.key === '4') switchScreen(4);
+});
+
+/* ==================================================================
+   ДЕМО-РЕЖИМ
+   ==================================================================
+   Работает, пока в CONFIG не вписан токен: генерирует правдоподобные
+   job'ы и лог, чтобы страницу можно было посмотреть без подключения.
+   Формат объектов повторяет ответ Windmill, поэтому переключение на
+   боевые данные ничего в рендере не меняет.
+*/
+const DEMO_PATHS = ['f/orchestrator/main', 'f/ingest/fetch_batch', 'f/ingest/normalize',
+                    'f/enrich/llm_classify', 'f/export/push_to_dwh', 'u/vlad/adhoc_check'];
+const DEMO_STEPS = ['fetch', 'validate', 'split', 'enrich', 'aggregate', 'export'];
+let demoPool = [], demoTick = 0;
+
+function demoJobs() {
+  demoTick++;
+
+  // Иногда добавляем новый job
+  if (demoPool.length < 24 && Math.random() < 0.5) {
+    const isFlow = Math.random() < 0.4;
+    demoPool.unshift({
+      type: 'QueuedJob',
+      id: crypto.randomUUID(),
+      script_path: pick(DEMO_PATHS),
+      job_kind: isFlow ? 'flow' : 'script',
+      created_by: 'u/vlad',
+      created_at: new Date().toISOString(),
+      running: false,
+      tag: pick(['default', 'gpu', 'heavy']),
+      args: { batch_id: randInt(1000, 9999), dry_run: false },
+      _born: demoTick,
+      _life: randInt(4, 14),
+      flow_status: isFlow ? { step: 0, modules: DEMO_STEPS.map((s, i) => ({ id: s, type: 'WaitingForPriorSteps' })) } : null
+    });
+  }
+
+  // Продвигаем состояния
+  for (const j of demoPool) {
+    const age = demoTick - j._born;
+    if (j.type === 'QueuedJob' && !j.running && age >= 1) { j.running = true; j.started_at = new Date().toISOString(); }
+    if (j.flow_status && j.running) {
+      const step = Math.min(DEMO_STEPS.length - 1, Math.floor(age / Math.max(1, j._life / DEMO_STEPS.length)));
+      j.flow_status.step = step;
+      j.flow_status.modules.forEach((m, i) => {
+        m.type = i < step ? 'Success' : i === step ? 'InProgress' : 'WaitingForPriorSteps';
+        if (i === step && Math.random() < 0.3) m.iterator = { index: randInt(0, 9), itered_len: 10 };
+      });
+    }
+    if (j.type === 'QueuedJob' && age >= j._life) {
+      const bad = Math.random() < 0.15;
+      Object.assign(j, {
+        type: 'CompletedJob',
+        running: false,
+        success: !bad,
+        canceled: !bad && Math.random() < 0.05,
+        duration_ms: j._life * CONFIG.pollJobsMs + randInt(-400, 2500),
+        completed_at: new Date().toISOString()
+      });
+      if (j.flow_status) j.flow_status.modules.forEach((m, i) => {
+        m.type = bad && i === j.flow_status.step ? 'Failure' : i <= j.flow_status.step ? 'Success' : 'WaitingForPriorSteps';
+      });
+    }
+  }
+  demoPool = demoPool.slice(0, 60);
+  return demoPool.map(j => ({ ...j }));
+}
+
+// ---------- демо-данные для второго экрана ----------
+function demoScripts() {
+  return DEMO_PATHS.filter(p => !p.includes('orchestrator')).map((p, i) => ({
+    path: p, language: pick(['bun', 'python3', 'deno', 'go']),
+    summary: 'демо-скрипт', archived: i === 4,
+    has_deploy_errors: i === 2, starred: i === 0
+  }));
+}
+function demoFlows() {
+  return [
+    { path: 'f/orchestrator/main', summary: 'основной сценарий', starred: true },
+    { path: 'f/orchestrator/nightly', summary: 'ночной прогон', has_deploy_errors: true }
+  ];
+}
+function demoSchedules() {
+  return [
+    { path: 'f/orchestrator/main', script_path: 'f/orchestrator/main', schedule: '0 */15 * * * *', enabled: true },
+    { path: 'f/export/push_to_dwh', script_path: 'f/export/push_to_dwh', schedule: '0 0 3 * * *', enabled: false }
+  ];
+}
+function demoAudit() {
+  const ops = ['scripts.update', 'flows.update', 'jobs.run.script', 'variables.update', 'schedules.create'];
+  const kinds = ['Create', 'Update', 'Execute', 'Delete'];
+  const now = Date.now();
+  return Array.from({ length: 18 }, (_, i) => ({
+    timestamp: new Date(now - i * 420000).toISOString(),
+    username: pick(['u/vlad', 'u/ci-bot']),
+    operation: pick(ops), action_kind: pick(kinds), resource: pick(DEMO_PATHS)
+  }));
+}
+
+// Синтетический лог для демо-режима
+const DEMO_LOG = [
+  '{"level":"info","msg":"worker picked up job","tag":"default"}',
+  'fetching batch window 2026-08-03T09:00Z .. 2026-08-03T10:00Z',
+  '  -> 1284 rows staged',
+  'validate: schema v3 ok, 0 rejects',
+  'WARN retrying upstream call (attempt 2/5)',
+  'enrich: llm_classify, 128 items, concurrency 8',
+  '  p50 latency 340ms, p95 812ms',
+  'aggregate: 1284 -> 96 groups',
+  'export: pushing to dwh.public.events',
+  '{"level":"info","msg":"step done","duration_ms":1840}'
+];
+function demoLogTick() {
+  if (DEMO && state.log.pending.length < 400) {
+    state.log.pending += pick(DEMO_LOG) + '\n';
+    if (Math.random() < 0.06) state.log.pending += 'ERROR upstream 502, backing off 4s\n';
+  }
+  setTimeout(demoLogTick, randInt(300, 900));
+}
+
+/* ==================================================================
+   СТАРТ
+   ================================================================== */
+async function main() {
+  buildMetrics();
+  renderFlow();
+  setConn('warn', 'читаю env.md ...');
+
+  let envNote = '', envHint = '';
+  try {
+    const n = await loadEnv();
+    envNote = 'env.md · ' + n + ' параметр(ов)';
+  } catch (e) {
+    // Самый частый случай: страницу открыли двойным кликом, то есть как file://
+    const viaFile = location.protocol === 'file:';
+    envNote = 'env.md не прочитан';
+    showBlocker('настройки из <code>env.md</code>');
+    envHint = viaFile
+      ? 'Страница открыта как <code>file://</code>, и браузер не дал ей прочитать соседний ' +
+        'файл — до env.md не дотянуться. Запустите <code>windmill-proxy.py</code> и откройте ' +
+        '<code>http://localhost:8787/</code>: прокси раздаёт эту же страницу по http и читает тот же env.md.'
+      : 'Файл <code>env.md</code> не отдался: ' + (e.status ? 'HTTP ' + e.status : e.message) +
+        '. Он должен лежать рядом со страницей.';
+    // Дальше работаем на встроенных значениях — токена там нет, значит демо-режим
+  }
+
+  DEMO = !CONFIG.token;
+
+  if (DEMO) {
+    // Если env.md не прочитался — показываем именно эту причину, она полезнее
+    setConn(envHint ? 'err' : 'demo', 'ДЕМО-режим · данные синтетические · ' + envNote,
+            envHint || 'Страница работает на сгенерированных данных — к Windmill запросов не было. ' +
+            'Чтобы подключиться, впишите <code>token</code> в <code>env.md</code> и обновите страницу.');
+    pushAlert('INFO', 'демо-режим: подключение к Windmill не выполнялось');
+    demoLogTick();
+  } else {
+    setConn('warn', 'подключаюсь к ' + CONFIG.base + ' · ' + envNote);
+  }
+
+  jobsLoop();
+  logLoop();
+  stateLoop();
+
+  // Остальные экраны наполняем сразу, чтобы они не были пустыми
+  loadState();
+  loadAudit();
+  loadResearchData();
+
+  dbLoop();
+  loadSnapshot();
+  loadCompanies();
+  renderCompany();
+}
+
+main();
+</script>
+</body>
+</html>

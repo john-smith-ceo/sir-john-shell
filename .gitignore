@@ -1,0 +1,17 @@
+# binary
+/sir-john-shell
+
+# go
+*.exe
+*.test
+*.out
+/vendor/
+
+# editor
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# os
+.DS_Store
