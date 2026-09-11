@@ -13,11 +13,8 @@
     <span class="title">SIR JOHN SHELL</span>
   </div>
   <div class="sys-info">
-    <span class="pill" id="conn-pill"><span class="led ok"></span> ONLINE</span>
-    <select class="pill" id="mode-select"><option value="">MODE: —</option></select>
-    <select class="pill" id="perm-select"><option value="">PERM: —</option></select>
-    <select class="pill" id="model-select"><option value="">MODEL: —</option></select>
     <span class="pill dim" id="session-pill">SESSION: —</span>
+    <span class="pill" id="conn-pill"><span class="led ok"></span> ONLINE</span>
   </div>
 </header>
 
@@ -32,7 +29,8 @@
             <header class="titlebar"><span class="title">CHAT</span></header>
             <div class="body" id="chat-body"></div>
             <footer class="chat-footer">
-              <span class="cf-model" id="cf-model">—</span>
+              <select class="pill" id="model-select"><option value="">MODEL: —</option></select>
+              <select class="pill" id="mode-select"><option value="">MODE: —</option></select>
               <div class="ctx-bar" title="Context usage">
                 <div class="ctx-fill" id="ctx-fill" style="width:0%"></div>
               </div>
