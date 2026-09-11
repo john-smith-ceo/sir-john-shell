@@ -6,7 +6,7 @@ Browser-native UI for [Devin](https://devin.ai) with live WebSocket streaming, e
 
 ### Prebuilt binaries
 
-Download the latest release from the [Releases](https://github.com/john-smith-ceo/sir-john-shell/releases) page:
+Download the latest release from the [Releases](https://github.com/john-smith-ceo/sir-john-shell/releases) page (e.g. [v0.1.1](https://github.com/john-smith-ceo/sir-john-shell/releases/tag/v0.1.1)):
 
 - `sir-john-shell-darwin-arm64` — Apple Silicon (M1/M2/M3)
 - `sir-john-shell-darwin-amd64` — Intel Mac
