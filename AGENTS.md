@@ -25,8 +25,12 @@ go vet ./...
 ## Run
 
 ```bash
-./sir-john-shell
+./sir-john-shell              # TUI in terminal
+./sir-john-shell -mode=web    # server + browser
+./sir-john-shell -mode=headless  # server only
 ```
+
+For a short command, `~/.bashrc` has a `devin()` function: `devin` starts the TUI, `devin <args>` uses the original `devin` CLI.
 
 ## Development static override
 

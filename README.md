@@ -12,10 +12,12 @@ go build -o sir-john-shell ./cmd/sir-john-shell
 ## Run
 
 ```bash
-./sir-john-shell
+./sir-john-shell          # TUI in terminal (default)
+./sir-john-shell -mode=web   # start server and open browser
+./sir-john-shell -mode=headless  # server only
 ```
 
-The server listens on `127.0.0.1:8080` by default. Open `http://127.0.0.1:8080` in a browser.
+The server listens on `127.0.0.1:8080` by default. Open `http://127.0.0.1:8080` in a browser in `web`/`headless` mode.
 
 ## CLI flags
 
