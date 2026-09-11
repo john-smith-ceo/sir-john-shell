@@ -289,12 +289,12 @@ select.pill option { background: #1a1a1a; color: #c0c0c0; }
   line-height: 1.5;
 }
 
-::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar { width: 3px; height: 3px; }
 ::-webkit-scrollbar-track { background: #111; }
-::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
 ::-webkit-scrollbar-thumb:hover { background: #555; }
 
-.body::-webkit-scrollbar { width: 5px; }
+.body::-webkit-scrollbar { width: 3px; }
 
 /* ============================================================
    CHAT — MESSENGER
@@ -423,27 +423,16 @@ a:hover { text-decoration: underline; }
 
 .ws-file {
   flex: 1 1 auto;
-  margin-left: 10px;
 }
 
 .ws-resizer {
-  width: 6px;
+  width: 4px;
   flex: 0 0 auto;
   cursor: col-resize;
   background: transparent;
-  position: relative;
+  transition: background .1s;
 }
-.ws-resizer::after {
-  content: '';
-  position: absolute;
-  left: 2px;
-  top: 10%;
-  height: 80%;
-  width: 2px;
-  background: #333;
-  border-radius: 1px;
-}
-.ws-resizer:hover::after { background: var(--green); }
+.ws-resizer:hover { background: #252525; }
 
 .ws-tree .f {
   color: #999;
