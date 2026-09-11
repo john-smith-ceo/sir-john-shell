@@ -14,6 +14,7 @@ import (
 
 	"sir-john-shell/internal/acp"
 	"sir-john-shell/internal/cli"
+	"sir-john-shell/internal/config"
 	"sir-john-shell/internal/server"
 )
 
@@ -32,6 +33,11 @@ func main() {
 	}
 	if *cwd != "." {
 		absCwd = *cwd
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		log.Printf("config: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -57,7 +63,7 @@ func main() {
 	}
 	log.Printf("ACP session: %s", session.SessionID)
 
-	srv := server.New(*addr, absCwd, client, session.SessionID)
+	srv := server.New(*addr, absCwd, cfg.User, client, session.SessionID)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)

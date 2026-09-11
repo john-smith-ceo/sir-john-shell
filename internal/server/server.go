@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -11,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
 	"sir-john-shell/internal/acp"
@@ -27,11 +30,12 @@ var upgrader = websocket.Upgrader{
 
 // Server holds the ACP client and WebSocket hub.
 type Server struct {
-	addr    string
-	cwd     string
-	acp     *acp.Client
-	session string
-	hub     *Hub
+	addr     string
+	cwd      string
+	userName string
+	acp      *acp.Client
+	session  string
+	hub      *Hub
 }
 
 // Hub keeps track of connected WebSocket clients.
@@ -54,18 +58,19 @@ type Client struct {
 }
 
 // New creates a server.
-func New(addr, cwd string, acpClient *acp.Client, sessionID string) *Server {
+func New(addr, cwd, userName string, acpClient *acp.Client, sessionID string) *Server {
 	h := &Hub{
 		clients:  make(map[*Client]bool),
 		sessions: make(map[string]map[*Client]bool),
 		queue:    make([][]byte, 0, 64),
 	}
 	return &Server{
-		addr:    addr,
-		cwd:     cwd,
-		acp:     acpClient,
-		session: sessionID,
-		hub:     h,
+		addr:     addr,
+		cwd:      cwd,
+		userName: userName,
+		acp:      acpClient,
+		session:  sessionID,
+		hub:      h,
 	}
 }
 
@@ -129,6 +134,57 @@ func (s *Server) sendWorkspace(c *Client, dir string) {
 	c.send <- data
 }
 
+const (
+	maxFileLines    = 100
+	maxFileReadSize = 256 * 1024
+)
+
+func isBinaryContent(b []byte) bool {
+	if !utf8.Valid(b) {
+		return true
+	}
+	// check for null bytes or control chars
+	for i, c := range b {
+		if i > 8192 {
+			break
+		}
+		if c == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func readFirstLines(path string, n int, maxSize int) ([]byte, int, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer f.Close()
+
+	limit := maxSize
+	info, err := f.Stat()
+	if err == nil && info.Size() < int64(limit) {
+		limit = int(info.Size())
+	}
+
+	reader := bufio.NewReader(io.LimitReader(f, int64(limit)))
+	var lines []byte
+	lineCount := 0
+	for lineCount < n {
+		line, err := reader.ReadBytes('\n')
+		if err != nil && len(line) == 0 {
+			break
+		}
+		lines = append(lines, line...)
+		lineCount++
+		if err != nil {
+			break
+		}
+	}
+	return lines, lineCount, nil
+}
+
 // sendFile reads a file and sends its contents to the client.
 func (s *Server) sendFile(c *Client, name string) {
 	path, err := safePath(s.cwd, name)
@@ -137,13 +193,64 @@ func (s *Server) sendFile(c *Client, name string) {
 		c.send <- data
 		return
 	}
-	content, err := os.ReadFile(path)
+
+	info, err := os.Stat(path)
 	if err != nil {
 		data, _ := json.Marshal(map[string]any{"type": "file", "name": name, "err": err.Error()})
 		c.send <- data
 		return
 	}
-	data, _ := json.Marshal(map[string]any{"type": "file", "name": name, "content": string(content)})
+	if info.IsDir() {
+		s.sendWorkspace(c, name)
+		return
+	}
+
+	// open to peek binary
+	f, err := os.Open(path)
+	if err != nil {
+		data, _ := json.Marshal(map[string]any{"type": "file", "name": name, "err": err.Error()})
+		c.send <- data
+		return
+	}
+	peek := make([]byte, 4096)
+	n, _ := f.Read(peek)
+	f.Close()
+	peek = peek[:n]
+	if isBinaryContent(peek) {
+		data, _ := json.Marshal(map[string]any{"type": "file", "name": name, "binary": true, "size": info.Size()})
+		c.send <- data
+		return
+	}
+
+	content, lines, err := readFirstLines(path, maxFileLines, maxFileReadSize)
+	if err != nil {
+		data, _ := json.Marshal(map[string]any{"type": "file", "name": name, "err": err.Error()})
+		c.send <- data
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(name))
+	isMarkdown := ext == ".md" || ext == ".markdown" || ext == ".mdx"
+
+	payload := map[string]any{
+		"type":    "file",
+		"name":    name,
+		"content": string(content),
+		"lines":   lines,
+		"total":   lines,
+		"binary":  false,
+		"size":    info.Size(),
+	}
+	if isMarkdown {
+		payload["markdown"] = true
+	}
+
+	// count total lines without reading whole file if we truncated
+	if int64(len(content)) < info.Size() {
+		payload["truncated"] = true
+	}
+
+	data, _ := json.Marshal(payload)
 	c.send <- data
 }
 
@@ -182,6 +289,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		"type":      "welcome",
 		"sessionId": s.session,
 		"cwd":       s.cwd,
+		"userName":  s.userName,
 	})
 	client.send <- welcome
 	// Send initial workspace tree.

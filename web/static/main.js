@@ -3,6 +3,7 @@
    ============================================================ */
 
 const $ = (id) => document.getElementById(id);
+let sessionUserName = 'Sir';
 
 function esc(s) {
   return s.replace(/[&<>]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;' }[c]));
@@ -129,6 +130,101 @@ function highlightCode(name, content) {
   return highlightGeneric(content);
 }
 
+function parseInlineHTML(s) {
+  s = esc(s);
+  // inline code
+  s = s.replace(/`([^`]+)`/g, '<code class="str">$1</code>');
+  // bold
+  s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/__(.+?)__/g, '<strong>$1</strong>');
+  // italic
+  s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  s = s.replace(/_(.+?)_/g, '<em>$1</em>');
+  // links
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+  // auto links
+  s = s.replace(/(https?:\/\/\S+)/g, '<a href="$1" target="_blank">$1</a>');
+  return s;
+}
+
+function renderMarkdown(md) {
+  const root = document.createElement('div');
+  root.className = 'markdown-body';
+  const lines = md.split('\n');
+  let i = 0;
+  let currentList = null;
+  while (i < lines.length) {
+    const raw = lines[i];
+    const trimmed = raw.trim();
+
+    // code block
+    if (trimmed.startsWith('```')) {
+      const lang = trimmed.slice(3).trim();
+      let code = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith('```')) {
+        code.push(lines[i]);
+        i++;
+      }
+      i++; // skip closing ```
+      if (currentList) { currentList = null; }
+      const pre = document.createElement('pre');
+      pre.className = 'code-block';
+      const codeEl = document.createElement('code');
+      codeEl.textContent = code.join('\n');
+      if (lang) pre.setAttribute('data-lang', lang);
+      pre.appendChild(codeEl);
+      root.appendChild(pre);
+      continue;
+    }
+
+    // headers
+    const hMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
+    if (hMatch) {
+      if (currentList) { currentList = null; }
+      const h = document.createElement('h' + Math.min(6, hMatch[1].length));
+      h.innerHTML = parseInlineHTML(hMatch[2]);
+      root.appendChild(h);
+      i++;
+      continue;
+    }
+
+    // list item
+    const ulMatch = trimmed.match(/^[-*]\s+(.*)$/);
+    const olMatch = trimmed.match(/^\d+\.\s+(.*)$/);
+    if (ulMatch || olMatch) {
+      const tag = ulMatch ? 'ul' : 'ol';
+      if (!currentList || currentList.tagName.toLowerCase() !== tag) {
+        currentList = document.createElement(tag);
+        root.appendChild(currentList);
+      }
+      const li = document.createElement('li');
+      li.innerHTML = parseInlineHTML((ulMatch ? ulMatch[1] : olMatch[1]));
+      currentList.appendChild(li);
+      i++;
+      continue;
+    } else if (currentList) {
+      currentList = null;
+    }
+
+    // empty line
+    if (trimmed === '') {
+      const sp = document.createElement('div');
+      sp.style.height = '8px';
+      root.appendChild(sp);
+      i++;
+      continue;
+    }
+
+    // paragraph
+    const p = document.createElement('p');
+    p.innerHTML = parseInlineHTML(trimmed);
+    root.appendChild(p);
+    i++;
+  }
+  return root;
+}
+
 /* ============================================================
    TEXT ENRICHMENT
    ============================================================ */
@@ -151,14 +247,29 @@ function enrichText(text) {
 /* ============================================================
    VIEW SWITCHER
    ============================================================ */
+function switchView(view) {
+  const current = document.querySelector('.view.active');
+  if (current && current.id !== 'view-preview') {
+    lastView = current.id.replace('view-', '');
+  }
+  document.querySelectorAll('.sw').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  const btn = document.querySelector(`.sw[data-view="${view}"]`);
+  const el = $(`view-${view}`);
+  if (btn) btn.classList.add('active');
+  if (el) el.classList.add('active');
+}
+
 document.querySelectorAll('.sw').forEach(btn => {
   btn.addEventListener('click', () => {
-    const view = btn.dataset.view;
-    document.querySelectorAll('.sw').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    btn.classList.add('active');
-    $(`view-${view}`).classList.add('active');
+    switchView(btn.dataset.view);
   });
+});
+
+let lastView = 'chat';
+
+$('preview-back').addEventListener('click', () => {
+  switchView(lastView || 'chat');
 });
 
 /* ============================================================
@@ -170,7 +281,7 @@ let sessionCwd = '';
 function addUserMessage(text) {
   const el = document.createElement('div');
   el.className = 'msg user';
-  el.innerHTML = `<div class="meta">Sir John Smith ${timeNow()}</div>` + enrichText(text);
+  el.innerHTML = `<div class="meta">${esc(sessionUserName)} ${timeNow()}</div>` + enrichText(text);
   $('chat-body').appendChild(el);
   autoScroll($('chat-body'));
 }
@@ -272,47 +383,77 @@ function renderConfig(configOptions) {
 }
 
 function renderSkills(commands) {
-  const panel = $('panel-commands');
-  if (!panel) return;
-  panel.innerHTML = '';
+  const skillsPanel = $('panel-skills-list');
+  const commandsPanel = $('panel-commands');
+  if (!skillsPanel || !commandsPanel) return;
+  skillsPanel.innerHTML = '';
+  commandsPanel.innerHTML = '';
 
-  const title = document.createElement('div');
-  title.style.cssText = 'color:#9ac16a; margin:0 0 8px;';
-  title.textContent = 'COMMANDS';
-  panel.appendChild(title);
+  const groups = { skills: {}, commands: {} };
 
-  const groups = {};
+  function bucketFor(cat) {
+    if (cat === 'Skills') return 'skills';
+    return 'commands';
+  }
+
   commands.forEach(cmd => {
     const cat = (cmd._meta && cmd._meta['cognition.ai/category']) || 'OTHER';
-    if (!groups[cat]) groups[cat] = [];
-    groups[cat].push(cmd);
+    const bucket = bucketFor(cat);
+    if (!groups[bucket][cat]) groups[bucket][cat] = [];
+    groups[bucket][cat].push(cmd);
   });
 
-  Object.keys(groups).sort().forEach(cat => {
-    const h = document.createElement('div');
-    h.style.cssText = 'color:#9ac16a; margin:12px 0 6px;';
-    h.textContent = cat.toUpperCase();
-    panel.appendChild(h);
+  function fill(panel, titleText, byCat) {
+    const title = document.createElement('div');
+    title.style.cssText = 'color:#9ac16a; margin:0 0 8px;';
+    title.textContent = titleText;
+    panel.appendChild(title);
 
-    groups[cat].forEach(cmd => {
-      const row = document.createElement('div');
-      row.className = 'list-row';
+    Object.keys(byCat).sort().forEach(cat => {
+      const h = document.createElement('div');
+      h.style.cssText = 'color:#9ac16a; margin:12px 0 6px;';
+      h.textContent = cat.toUpperCase();
+      panel.appendChild(h);
 
-      const code = el('span', 'code', '/' + (cmd.name || ''));
-      row.appendChild(code);
+      byCat[cat].forEach(cmd => {
+        const row = document.createElement('div');
+        row.className = 'list-row skill-row';
 
-      if (cmd.input && cmd.input.hint) {
-        const hint = el('span', 'dim', cmd.input.hint);
-        hint.style.marginLeft = '6px';
-        row.appendChild(hint);
-      }
+        const left = document.createElement('div');
+        left.style.display = 'flex';
+        left.style.flex = '1';
+        left.style.flexDirection = 'column';
 
-      const name = el('span', 'name', cmd.description || '');
-      row.appendChild(name);
+        const head = document.createElement('div');
+        head.style.display = 'flex';
+        head.style.alignItems = 'center';
+        head.style.gap = '6px';
 
-      panel.appendChild(row);
+        const code = el('span', 'code', '/' + (cmd.name || ''));
+        head.appendChild(code);
+
+        if (cmd.input && cmd.input.hint) {
+          const hint = el('span', 'dim', cmd.input.hint);
+          head.appendChild(hint);
+        }
+
+        left.appendChild(head);
+
+        if (cmd.description) {
+          const desc = document.createElement('div');
+          desc.style.cssText = 'color:#666; font-size:11px; margin-top:3px; line-height:1.4;';
+          desc.textContent = cmd.description;
+          left.appendChild(desc);
+        }
+
+        row.appendChild(left);
+        panel.appendChild(row);
+      });
     });
-  });
+  }
+
+  fill(skillsPanel, 'SKILLS', groups.skills);
+  fill(commandsPanel, 'COMMANDS', groups.commands);
 }
 
 function el(tag, cls, text) {
@@ -344,15 +485,46 @@ function renderTree(files) {
   });
 }
 
-function showFile(name, content, err) {
-  const file = $('ws-file');
+function showFile(name, content, err, meta) {
+  const body = $('preview-body');
+  const title = $('preview-title');
+  const preview = $('view-preview');
+
   if (err) {
-    file.innerHTML = `<div style="color:#ff5f56;">${esc(name)}: ${esc(err)}</div>`;
+    title.textContent = 'PREVIEW';
+    body.innerHTML = `<div style="color:#ff5f56;padding:10px;">${esc(name)}: ${esc(err)}</div>`;
+    switchView('preview');
     return;
   }
-  const highlighted = highlightCode(name, content);
-  file.innerHTML = `<div style="color:#666;margin-bottom:6px;">${esc(name)}</div>` +
-                   `<pre class="code-block" style="white-space:pre-wrap;">${highlighted}</pre>`;
+
+  if (meta && meta.binary) {
+    title.textContent = 'PREVIEW: ' + esc(name);
+    body.innerHTML = `<div style="color:#888;padding:10px;">Binary file (${esc(String(meta.size || '?'))} bytes) cannot be previewed.</div>`;
+    switchView('preview');
+    return;
+  }
+
+  title.textContent = 'PREVIEW: ' + esc(name);
+  body.innerHTML = '';
+
+  if (meta && meta.markdown) {
+    body.appendChild(renderMarkdown(content));
+  } else {
+    const highlighted = highlightCode(name, content);
+    const pre = document.createElement('pre');
+    pre.className = 'code-block preview-code';
+    pre.innerHTML = highlighted;
+    body.appendChild(pre);
+  }
+
+  if (meta && meta.truncated) {
+    const note = document.createElement('div');
+    note.className = 'preview-truncated';
+    note.textContent = `Showing first ${meta.lines || 0} lines.`;
+    body.appendChild(note);
+  }
+
+  switchView('preview');
 }
 
 /* ============================================================
@@ -439,6 +611,7 @@ function handleMessage(msg) {
     $('session-pill').textContent = 'SESSION: ' + msg.sessionId;
     sessionCwd = msg.cwd;
     $('ws-path').textContent = sessionCwd;
+    if (msg.userName) sessionUserName = msg.userName;
     logTerminal('info', '[session] ' + msg.sessionId);
     return;
   }
@@ -452,7 +625,13 @@ function handleMessage(msg) {
 
   // File content
   if (msg.type === 'file') {
-    showFile(msg.name, msg.content, msg.err);
+    showFile(msg.name, msg.content, msg.err, {
+      binary: msg.binary,
+      markdown: msg.markdown,
+      truncated: msg.truncated,
+      lines: msg.lines,
+      size: msg.size
+    });
     return;
   }
 
@@ -795,7 +974,39 @@ function initDemo() {
   demoContextBar();
   // prepare Skills/Config sections
   const skills = $('panel-skills');
-  if (skills) skills.innerHTML = '<div id="panel-config"></div><div id="panel-commands"></div>';
+  if (skills) {
+    skills.innerHTML = '';
+    const tabs = document.createElement('div');
+    tabs.className = 'skills-tabs';
+    tabs.innerHTML = '<button class="sk-tab active" data-sk="skills">SKILLS</button>' +
+                     '<button class="sk-tab" data-sk="commands">COMMANDS</button>' +
+                     '<button class="sk-tab" data-sk="config">CONFIG</button>';
+    skills.appendChild(tabs);
+
+    const panels = { skills: 'panel-skills-list', commands: 'panel-commands', config: 'panel-config' };
+    Object.keys(panels).forEach(key => {
+      const p = document.createElement('div');
+      p.id = panels[key];
+      p.className = 'sk-panel' + (key === 'skills' ? ' active' : '');
+      skills.appendChild(p);
+    });
+
+    tabs.addEventListener('click', (e) => {
+      if (!e.target.classList.contains('sk-tab')) return;
+      document.querySelectorAll('.sk-tab').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.sk-panel').forEach(p => p.classList.remove('active'));
+      e.target.classList.add('active');
+      const target = $(panels[e.target.dataset.sk]);
+      if (target) target.classList.add('active');
+    });
+
+    const devinLink = document.createElement('a');
+    devinLink.className = 'devin-link';
+    devinLink.href = 'https://devin.ai';
+    devinLink.target = '_blank';
+    devinLink.textContent = 'Open Devin →';
+    skills.appendChild(devinLink);
+  }
   connect();
 }
 
