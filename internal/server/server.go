@@ -41,6 +41,7 @@ type Hub struct {
 	clients  map[*Client]bool
 	sessions map[string]map[*Client]bool
 	active   *Client
+	queue    [][]byte
 }
 
 // Client is a WebSocket connection.
@@ -57,6 +58,7 @@ func New(addr, cwd string, acpClient *acp.Client, sessionID string) *Server {
 	h := &Hub{
 		clients:  make(map[*Client]bool),
 		sessions: make(map[string]map[*Client]bool),
+		queue:    make([][]byte, 0, 64),
 	}
 	return &Server{
 		addr:    addr,
@@ -299,6 +301,11 @@ func (h *Hub) register(c *Client) bool {
 	}
 	h.sessions[c.sessionID][c] = true
 	h.active = c
+	// Flush queued ACP notifications to the new active client.
+	for _, msg := range h.queue {
+		c.send <- msg
+	}
+	h.queue = h.queue[:0]
 	return true
 }
 
@@ -319,11 +326,17 @@ func (h *Hub) unregister(c *Client) {
 	c.closeSend()
 }
 
+const maxQueue = 64
+
 // broadcast sends a message to the active client for the given session.
+// If no client is connected yet, the message is queued (up to maxQueue).
 func (h *Hub) broadcast(sessionID string, msg []byte) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.active == nil || h.active.sessionID != sessionID {
+		if len(h.queue) < maxQueue {
+			h.queue = append(h.queue, msg)
+		}
 		return
 	}
 	select {

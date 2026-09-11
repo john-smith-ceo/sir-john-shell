@@ -116,6 +116,7 @@ body::after {
   white-space: nowrap;
 }
 .pill.dim { color: #666; }
+.dim { color: var(--dim); }
 
 select.pill {
   appearance: none;

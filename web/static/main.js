@@ -134,9 +134,10 @@ function highlightCode(name, content) {
    ============================================================ */
 function enrichText(text) {
   let s = esc(text);
-  s = s.replace(/`([^`]+)`/g, '<code class="str">$1</code>');
-  s = s.replace(/"([^"]*)"/g, '<span class="str">"$1"</span>');
-  s = s.replace(/'([^']*)'/g, '<span class="str">\'$1\'</span>');
+  // Wrap safely quoted strings, escaping the captured content.
+  s = s.replace(/`([^`]+)`/g, (m, g1) => `<code class="str">${esc(g1)}</code>`);
+  s = s.replace(/"([^"\\]|\\.)*"/g, m => `<span class="str">${esc(m)}</span>`);
+  s = s.replace(/'([^'\\]|\\.)*'/g, m => `<span class="str">${esc(m)}</span>`);
   s = s.replace(/(https?:\/\/\S+)/g, '<a class="typ" href="$1" target="_blank">$1</a>');
   s = s.replace(/(\/(?:[A-Za-z0-9_.\-]+(?:\/|$))+)/g, '<span class="typ">$1</span>');
   s = s.replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="num">$1</span>');
@@ -234,8 +235,7 @@ function logTerminal(level, text) {
 }
 
 function renderConfig(configOptions) {
-  const panel = $('panel-skills');
-  let html = '';
+  let html = '<div style="color:#9ac16a;margin:0 0 8px;">CONFIG</div>';
   configOptions.forEach(opt => {
     html += `<div style="color:#666;margin:10px 0 4px;">${esc(opt.name.toUpperCase())}</div>`;
     html += `<div class="list-row"><span class="code">${esc(opt.id)}</span><span class="name">${esc(opt.currentValue)}</span></div>`;
@@ -245,17 +245,35 @@ function renderConfig(configOptions) {
       });
     }
   });
-  panel.innerHTML = html;
+  const panel = $('panel-config');
+  if (panel) panel.innerHTML = html;
 }
 
 function renderSkills(commands) {
-  const panel = $('panel-skills');
+  const panel = $('panel-commands');
+  if (!panel) return;
   panel.innerHTML = '';
+
+  const groups = {};
   commands.forEach(cmd => {
-    const row = document.createElement('div');
-    row.className = 'list-row';
-    row.innerHTML = `<span class="code">/${esc(cmd.name)}</span><span class="name">${esc(cmd.description || '')}</span>`;
-    panel.appendChild(row);
+    const cat = (cmd._meta && cmd._meta['cognition.ai/category']) || 'OTHER';
+    if (!groups[cat]) groups[cat] = [];
+    groups[cat].push(cmd);
+  });
+
+  Object.keys(groups).sort().forEach(cat => {
+    const h = document.createElement('div');
+    h.style.cssText = 'color:#9ac16a;margin:12px 0 6px;';
+    h.textContent = cat.toUpperCase();
+    panel.appendChild(h);
+
+    groups[cat].forEach(cmd => {
+      const row = document.createElement('div');
+      row.className = 'list-row';
+      const hint = cmd.input && cmd.input.hint ? ` <span class="dim">${esc(cmd.input.hint)}</span>` : '';
+      row.innerHTML = `<span class="code">/${esc(cmd.name)}</span>${hint}<span class="name">${esc(cmd.description || '')}</span>`;
+      panel.appendChild(row);
+    });
   });
 }
 
@@ -642,6 +660,9 @@ function initDemo() {
   initSwap();
   initHeaderControls();
   demoContextBar();
+  // prepare Skills/Config sections
+  const skills = $('panel-skills');
+  if (skills) skills.innerHTML = '<div id="panel-config"></div><div id="panel-commands"></div>';
   connect();
 }
 
