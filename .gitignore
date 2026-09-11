@@ -1,5 +1,6 @@
-# binary
+# binaries
 /sir-john-shell
+/sir-john-shell-*
 
 # go
 *.exe
@@ -15,3 +16,6 @@
 
 # os
 .DS_Store
+
+# release builds
+/dist/

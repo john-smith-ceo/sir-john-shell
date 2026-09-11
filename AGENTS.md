@@ -9,9 +9,26 @@
 
 ## Build
 
+### Local
+
 ```bash
 cd /home/vlad/Projects/sir-john-shell
 go build -o sir-john-shell ./cmd/sir-john-shell
+```
+
+### macOS
+
+```bash
+git clone https://github.com/john-smith-ceo/sir-john-shell.git
+cd sir-john-shell
+go build -o sir-john-shell ./cmd/sir-john-shell
+```
+
+Or download a release binary and add to `~/.zshrc`:
+
+```zsh
+sirj() { /Users/you/bin/sir-john-shell "$@"; }
+alias devin=sirj
 ```
 
 ## Verify

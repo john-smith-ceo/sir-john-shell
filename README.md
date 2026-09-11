@@ -2,10 +2,43 @@
 
 Browser-native UI for [Devin](https://devin.ai) with live WebSocket streaming, embedded in a single Go binary.
 
-## Build
+## Install
+
+### Prebuilt binaries
+
+Download the latest release from the [Releases](https://github.com/john-smith-ceo/sir-john-shell/releases) page:
+
+- `sir-john-shell-darwin-arm64` — Apple Silicon (M1/M2/M3)
+- `sir-john-shell-darwin-amd64` — Intel Mac
+- `sir-john-shell-linux-amd64` — Linux x86_64
 
 ```bash
-cd /home/vlad/Projects/sir-john-shell
+chmod +x sir-john-shell-darwin-arm64
+mv sir-john-shell-darwin-arm64 /usr/local/bin/sir-john-shell
+```
+
+### macOS (Apple Silicon) example
+
+```bash
+mkdir -p ~/bin
+cp sir-john-shell-darwin-arm64 ~/bin/sir-john-shell
+chmod +x ~/bin/sir-john-shell
+```
+
+Add to `~/.zshrc`:
+
+```zsh
+sirj() { ~/bin/sir-john-shell "$@"; }
+alias devin=sirj
+```
+
+Then `source ~/.zshrc` and run `devin` from any project directory.
+
+### Build from source
+
+```bash
+git clone https://github.com/john-smith-ceo/sir-john-shell.git
+cd sir-john-shell
 go build -o sir-john-shell ./cmd/sir-john-shell
 ```
 
