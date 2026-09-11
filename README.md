@@ -4,9 +4,30 @@ Browser-native UI for [Devin](https://devin.ai) with live WebSocket streaming, e
 
 ## Install
 
+### One-line install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/john-smith-ceo/sir-john-shell/main/install.sh | bash
+```
+
+With your name:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/john-smith-ceo/sir-john-shell/main/install.sh | bash -s -- --user "Sir John Smith"
+```
+
+Then reload your shell and run `devin` from any project directory.
+
+To remove:
+
+```bash
+./uninstall.sh        # keeps config
+./uninstall.sh --purge # removes everything
+```
+
 ### Prebuilt binaries
 
-Download the latest release from the [Releases](https://github.com/john-smith-ceo/sir-john-shell/releases) page (e.g. [v0.1.4](https://github.com/john-smith-ceo/sir-john-shell/releases/tag/v0.1.4)):
+Download the latest release from the [Releases](https://github.com/john-smith-ceo/sir-john-shell/releases) page (e.g. [v0.1.5](https://github.com/john-smith-ceo/sir-john-shell/releases/tag/v0.1.5)):
 
 - `sir-john-shell-darwin-arm64` — Apple Silicon (M1/M2/M3)
 - `sir-john-shell-darwin-amd64` — Intel Mac
