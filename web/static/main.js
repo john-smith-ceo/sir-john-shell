@@ -482,7 +482,7 @@ function handleMessage(msg) {
         break;
 
       case 'current_mode_update':
-        $('mode-pill').textContent = 'MODE: ' + up.currentModeId;
+        applyModeUi(up.currentModeId);
         break;
 
       case 'session_info_update':
@@ -582,13 +582,62 @@ function populateSelect(id, label, opt) {
   if (wasOpen) sel.blur();
 }
 
+const modeUiMap = {
+  'ask':     { mode: 'ask',         perm: 'none' },
+  'plan':    { mode: 'plan',        perm: 'none' },
+  'accept-edits': { mode: 'code',   perm: 'accept-edits' },
+  'smart':   { mode: 'code',        perm: 'smart' },
+  'bypass':  { mode: 'code',        perm: 'bypass' }
+};
+
+const modeOptions = [
+  { value: 'ask',  name: 'Ask' },
+  { value: 'plan', name: 'Plan' },
+  { value: 'code', name: 'Code' }
+];
+
+const permOptions = [
+  { value: 'none',        name: '—' },
+  { value: 'accept-edits', name: 'Accept edits' },
+  { value: 'smart',       name: 'Smart' },
+  { value: 'bypass',      name: 'Bypass' }
+];
+
+function buildSelect(id, label, options, current) {
+  const sel = $(id);
+  if (!sel) return;
+  const wasOpen = document.activeElement === sel;
+  sel.innerHTML = '';
+  const first = document.createElement('option');
+  first.value = '';
+  first.textContent = label;
+  first.disabled = true;
+  sel.appendChild(first);
+  options.forEach(o => {
+    const option = document.createElement('option');
+    option.value = o.value;
+    option.textContent = o.name;
+    if (o.value === current) option.selected = true;
+    sel.appendChild(option);
+  });
+  if (wasOpen) sel.blur();
+}
+
+function applyModeUi(modeId) {
+  const ui = modeUiMap[modeId] || { mode: 'code', perm: 'accept-edits' };
+  buildSelect('mode-select', 'MODE:', modeOptions, ui.mode);
+  buildSelect('perm-select', 'PERM:', permOptions, ui.perm);
+  const ms = $('mode-select');
+  if (ms) ms.dataset.current = ui.mode;
+  const ps = $('perm-select');
+  if (ps) ps.dataset.current = ui.perm;
+}
+
 function updateHeaderFromConfig(opts) {
   if (!opts) return;
   opts.forEach(opt => {
     if (opt.id === 'mode' && opt.currentValue) {
-      populateSelect('mode-select', 'MODE', opt);
-      const ms = $('mode-select');
-      if (ms) ms.dataset.current = opt.currentValue;
+      applyModeUi(opt.currentValue);
     }
     if (opt.id === 'model' && opt.currentValue) {
       populateSelect('model-select', 'MODEL', opt);
@@ -677,13 +726,59 @@ voiceBtn.addEventListener('click', async () => {
   }
 });
 
-function initHeaderControls() {
-  const modeCmd = { 'accept-edits': '/code', 'ask': '/ask', 'plan': '/plan', 'smart': '/smart', 'bypass': '/bypass' };
+function commandFromMode(mode, perm) {
+  if (mode === 'ask') return '/ask';
+  if (mode === 'plan') return '/plan';
+  if (mode === 'code') {
+    if (perm === 'smart') return '/smart';
+    if (perm === 'bypass') return '/bypass';
+    return '/code';
+  }
+  return null;
+}
 
+function initHeaderControls() {
   $('mode-select').addEventListener('change', (e) => {
-    const val = e.target.value;
-    const cmd = modeCmd[val];
-    if (cmd && socket && val !== e.target.dataset.current) {
+    const mode = e.target.value;
+    if (!mode || !socket || mode === e.target.dataset.current) return;
+
+    const ps = $('perm-select');
+    let perm = ps ? ps.value : 'accept-edits';
+
+    if (mode === 'ask' || mode === 'plan') {
+      perm = 'none';
+      buildSelect('perm-select', 'PERM:', permOptions, 'none');
+      if (ps) ps.dataset.current = 'none';
+    } else if (mode === 'code' && (perm === 'none' || !perm)) {
+      perm = 'accept-edits';
+      buildSelect('perm-select', 'PERM:', permOptions, 'accept-edits');
+      if (ps) ps.dataset.current = 'accept-edits';
+    }
+
+    const cmd = commandFromMode(mode, perm);
+    if (cmd) {
+      socket.send(JSON.stringify({ type: 'prompt', text: cmd }));
+      addUserMessage(cmd);
+    }
+  });
+
+  $('perm-select').addEventListener('change', (e) => {
+    const perm = e.target.value;
+    if (!perm || !socket || perm === e.target.dataset.current) return;
+
+    const ms = $('mode-select');
+    let mode = ms ? ms.value : 'code';
+
+    if (perm === 'smart' || perm === 'bypass' || perm === 'accept-edits') {
+      if (mode !== 'code') {
+        mode = 'code';
+        buildSelect('mode-select', 'MODE:', modeOptions, 'code');
+        if (ms) ms.dataset.current = 'code';
+      }
+    }
+
+    const cmd = commandFromMode(mode, perm);
+    if (cmd) {
       socket.send(JSON.stringify({ type: 'prompt', text: cmd }));
       addUserMessage(cmd);
     }

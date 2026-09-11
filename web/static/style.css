@@ -419,6 +419,13 @@ a:hover { text-decoration: underline; }
 .ws-tree {
   width: 140px;
   flex: 0 0 auto;
+  direction: rtl;
+  padding-left: 6px;
+}
+
+.ws-tree .f {
+  direction: ltr;
+  text-align: left;
 }
 
 .ws-file {
