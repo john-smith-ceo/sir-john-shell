@@ -27,7 +27,7 @@ To remove:
 
 ### Prebuilt binaries
 
-Download the latest release from the [Releases](https://github.com/john-smith-ceo/sir-john-shell/releases) page (e.g. [v0.1.5](https://github.com/john-smith-ceo/sir-john-shell/releases/tag/v0.1.5)):
+Download the latest release from the [Releases](https://github.com/john-smith-ceo/sir-john-shell/releases) page (e.g. [v0.1.6](https://github.com/john-smith-ceo/sir-john-shell/releases/tag/v0.1.6)):
 
 - `sir-john-shell-darwin-arm64` — Apple Silicon (M1/M2/M3)
 - `sir-john-shell-darwin-amd64` — Intel Mac
