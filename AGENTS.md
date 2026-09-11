@@ -27,8 +27,14 @@ go build -o sir-john-shell ./cmd/sir-john-shell
 Or download a release binary and add to `~/.zshrc`:
 
 ```zsh
-sirj() { /Users/you/bin/sir-john-shell "$@"; }
-alias devin=sirj
+devin() {
+  if [ $# -eq 0 ]; then
+    /Users/you/bin/sir-john-shell
+  else
+    command devin "$@"
+  fi
+}
+alias sjs='/Users/you/bin/sir-john-shell'
 ```
 
 ## Verify

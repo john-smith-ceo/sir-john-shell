@@ -28,8 +28,14 @@ chmod +x ~/bin/sir-john-shell
 Add to `~/.zshrc`:
 
 ```zsh
-sirj() { ~/bin/sir-john-shell "$@"; }
-alias devin=sirj
+devin() {
+  if [ $# -eq 0 ]; then
+    ~/bin/sir-john-shell
+  else
+    command devin "$@"
+  fi
+}
+alias sjs='~/bin/sir-john-shell'
 ```
 
 Then `source ~/.zshrc` and run `devin` from any project directory.
