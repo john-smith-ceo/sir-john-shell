@@ -323,7 +323,18 @@ function connect() {
     logTerminal('info', '[ws] connected');
   };
 
-  socket.onclose = () => {
+  socket.onclose = (e) => {
+    if (e.code === 1008) {
+      document.body.innerHTML = `
+        <div style="display:flex;justify-content:center;align-items:center;height:100vh;background:#0a0a0a;color:#9ac16a;font-family:ui-monospace,monospace;font-size:16px;text-align:center;padding:20px;box-sizing:border-box;">
+          <div>
+            <div style="font-size:24px;margin-bottom:12px;">SIR JOHN SHELL</div>
+            <div>Уже запущено в другой вкладке или окне.</div>
+            <div style="color:#666;margin-top:8px;">Закройте эту вкладку.</div>
+          </div>
+        </div>`;
+      return;
+    }
     $('conn-pill').innerHTML = '<span class="led" style="background:#666"></span> OFFLINE';
     logTerminal('warn', '[ws] disconnected');
     setTimeout(connect, 3000);
@@ -332,6 +343,10 @@ function connect() {
   socket.onerror = (e) => {
     logTerminal('err', '[ws] error');
   };
+
+  window.addEventListener('beforeunload', () => {
+    if (socket) socket.close();
+  });
 
   socket.onmessage = (e) => {
     try {

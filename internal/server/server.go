@@ -33,10 +33,12 @@ type Server struct {
 }
 
 // Hub keeps track of connected WebSocket clients.
+// Only one client (active) is allowed at a time to avoid duplicate UIs.
 type Hub struct {
-	mu       sync.RWMutex
+	mu       sync.Mutex
 	clients  map[*Client]bool
 	sessions map[string]map[*Client]bool
+	active   *Client
 }
 
 // Client is a WebSocket connection.
@@ -119,7 +121,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		sessionID: s.session,
 		send:      make(chan []byte, 256),
 	}
-	s.hub.register(client)
+	if !s.hub.register(client) {
+		return
+	}
 
 	// Send welcome message.
 	welcome, _ := json.Marshal(map[string]any{
@@ -141,9 +145,9 @@ func (c *Client) readPump(s *Server) {
 	}()
 
 	c.conn.SetReadLimit(64 * 1024)
-	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	c.conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		c.conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 		return nil
 	})
 
@@ -187,7 +191,7 @@ func (c *Client) readPump(s *Server) {
 
 // writePump sends messages to the WebSocket client.
 func (c *Client) writePump() {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer func() {
 		ticker.Stop()
 		c.conn.Close()
@@ -217,15 +221,25 @@ func (c *Client) writePump() {
 
 func (c *Client) closeSend() { c.closeOnce.Do(func() { close(c.send) }) }
 
-// register adds a client to the hub.
-func (h *Hub) register(c *Client) {
+// register adds a client to the hub. Only the first client becomes active;
+// any later client is rejected with "session in use".
+func (h *Hub) register(c *Client) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.active != nil {
+		closeMsg := websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "session in use")
+		_ = c.conn.WriteMessage(websocket.CloseMessage, closeMsg)
+		c.closeSend()
+		_ = c.conn.Close()
+		return false
+	}
 	h.clients[c] = true
 	if h.sessions[c.sessionID] == nil {
 		h.sessions[c.sessionID] = make(map[*Client]bool)
 	}
 	h.sessions[c.sessionID][c] = true
+	h.active = c
+	return true
 }
 
 // unregister removes a client from the hub.
@@ -239,20 +253,26 @@ func (h *Hub) unregister(c *Client) {
 			delete(h.sessions, c.sessionID)
 		}
 	}
+	if h.active == c {
+		h.active = nil
+	}
 	c.closeSend()
 }
 
-// broadcast sends a message to all clients for the given session.
+// broadcast sends a message to the active client for the given session.
 func (h *Hub) broadcast(sessionID string, msg []byte) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for c := range h.sessions[sessionID] {
-		select {
-		case c.send <- msg:
-		default:
-			delete(h.sessions[sessionID], c)
-			delete(h.clients, c)
-			c.closeSend()
-		}
+	if h.active == nil || h.active.sessionID != sessionID {
+		return
+	}
+	select {
+	case h.active.send <- msg:
+	default:
+		c := h.active
+		h.active = nil
+		delete(h.clients, c)
+		delete(h.sessions[sessionID], c)
+		c.closeSend()
 	}
 }
