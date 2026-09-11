@@ -235,24 +235,48 @@ function logTerminal(level, text) {
 }
 
 function renderConfig(configOptions) {
-  let html = '<div style="color:#9ac16a;margin:0 0 8px;">CONFIG</div>';
+  const panel = $('panel-config');
+  if (!panel) return;
+  panel.innerHTML = '';
+
+  const title = document.createElement('div');
+  title.style.cssText = 'color:#9ac16a; margin:0 0 8px;';
+  title.textContent = 'CONFIG';
+  panel.appendChild(title);
+
   configOptions.forEach(opt => {
-    html += `<div style="color:#666;margin:10px 0 4px;">${esc(opt.name.toUpperCase())}</div>`;
-    html += `<div class="list-row"><span class="code">${esc(opt.id)}</span><span class="name">${esc(opt.currentValue)}</span></div>`;
+    const group = document.createElement('div');
+    group.style.cssText = 'color:#666; margin:10px 0 4px;';
+    group.textContent = String(opt.name || '').toUpperCase();
+    panel.appendChild(group);
+
+    const current = document.createElement('div');
+    current.className = 'list-row';
+    current.appendChild(el('span', 'code', opt.id || ''));
+    current.appendChild(el('span', 'name', opt.currentValue || ''));
+    panel.appendChild(current);
+
     if (opt.options) {
       opt.options.forEach(o => {
-        html += `<div class="list-row"><span class="code">${esc(o.value)}</span><span class="name">${esc(o.name)}</span></div>`;
+        const row = document.createElement('div');
+        row.className = 'list-row';
+        row.appendChild(el('span', 'code', o.value || ''));
+        row.appendChild(el('span', 'name', o.name || ''));
+        panel.appendChild(row);
       });
     }
   });
-  const panel = $('panel-config');
-  if (panel) panel.innerHTML = html;
 }
 
 function renderSkills(commands) {
   const panel = $('panel-commands');
   if (!panel) return;
   panel.innerHTML = '';
+
+  const title = document.createElement('div');
+  title.style.cssText = 'color:#9ac16a; margin:0 0 8px;';
+  title.textContent = 'COMMANDS';
+  panel.appendChild(title);
 
   const groups = {};
   commands.forEach(cmd => {
@@ -263,18 +287,36 @@ function renderSkills(commands) {
 
   Object.keys(groups).sort().forEach(cat => {
     const h = document.createElement('div');
-    h.style.cssText = 'color:#9ac16a;margin:12px 0 6px;';
+    h.style.cssText = 'color:#9ac16a; margin:12px 0 6px;';
     h.textContent = cat.toUpperCase();
     panel.appendChild(h);
 
     groups[cat].forEach(cmd => {
       const row = document.createElement('div');
       row.className = 'list-row';
-      const hint = cmd.input && cmd.input.hint ? ` <span class="dim">${esc(cmd.input.hint)}</span>` : '';
-      row.innerHTML = `<span class="code">/${esc(cmd.name)}</span>${hint}<span class="name">${esc(cmd.description || '')}</span>`;
+
+      const code = el('span', 'code', '/' + (cmd.name || ''));
+      row.appendChild(code);
+
+      if (cmd.input && cmd.input.hint) {
+        const hint = el('span', 'dim', cmd.input.hint);
+        hint.style.marginLeft = '6px';
+        row.appendChild(hint);
+      }
+
+      const name = el('span', 'name', cmd.description || '');
+      row.appendChild(name);
+
       panel.appendChild(row);
     });
   });
+}
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
 }
 
 /* ============================================================
