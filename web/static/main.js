@@ -699,11 +699,53 @@ function initHeaderControls() {
 }
 
 /* ============================================================
+   WORKSPACE RESIZER
+   ============================================================ */
+function initResizer() {
+  const resizer = $('ws-resizer');
+  const tree = $('ws-tree');
+  if (!resizer || !tree) return;
+
+  // restore saved width
+  const saved = localStorage.getItem('sir-john-shell:tree-width');
+  if (saved) tree.style.width = saved + 'px';
+
+  let startX = 0;
+  let startW = 0;
+
+  resizer.addEventListener('mousedown', (e) => {
+    startX = e.clientX;
+    startW = tree.offsetWidth;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+
+    function onMove(ev) {
+      const w = Math.max(80, Math.min(400, startW + (ev.clientX - startX)));
+      tree.style.width = w + 'px';
+    }
+
+    function onUp(ev) {
+      const w = Math.max(80, Math.min(400, startW + (ev.clientX - startX)));
+      tree.style.width = w + 'px';
+      localStorage.setItem('sir-john-shell:tree-width', w);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    }
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
+/* ============================================================
    INIT
    ============================================================ */
 function initDemo() {
   initSwap();
   initHeaderControls();
+  initResizer();
   demoContextBar();
   // prepare Skills/Config sections
   const skills = $('panel-skills');

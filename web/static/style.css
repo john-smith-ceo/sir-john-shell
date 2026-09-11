@@ -401,9 +401,8 @@ a:hover { text-decoration: underline; }
 }
 
 .ws-layout {
-  display: grid;
-  grid-template-columns: 120px 1fr;
-  gap: 10px;
+  display: flex;
+  gap: 0;
   height: calc(100% - 24px);
 }
 
@@ -416,6 +415,35 @@ a:hover { text-decoration: underline; }
   font-size: 12px;
   white-space: pre-wrap;
 }
+
+.ws-tree {
+  width: 140px;
+  flex: 0 0 auto;
+}
+
+.ws-file {
+  flex: 1 1 auto;
+  margin-left: 10px;
+}
+
+.ws-resizer {
+  width: 6px;
+  flex: 0 0 auto;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+}
+.ws-resizer::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 10%;
+  height: 80%;
+  width: 2px;
+  background: #333;
+  border-radius: 1px;
+}
+.ws-resizer:hover::after { background: var(--green); }
 
 .ws-tree .f {
   color: #999;
@@ -556,6 +584,9 @@ a:hover { text-decoration: underline; }
 @media (max-width: 700px) {
   .desktop { display: flex; flex-direction: column; overflow-y: auto; }
   .view { min-height: 60vh; }
-  .ws-layout { grid-template-columns: 1fr; }
+  .ws-layout { flex-direction: column; }
+  .ws-tree { width: 100% !important; margin-bottom: 10px; }
+  .ws-file { margin-left: 0; }
+  .ws-resizer { display: none; }
   .switcher { flex-direction: row; flex-wrap: wrap; }
 }
