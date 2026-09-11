@@ -308,6 +308,7 @@ function finalizeAgentMessage() {
   const span = currentMsg.agent;
   const text = span.textContent;
   span.innerHTML = enrichText(text);
+  speak(text);
   currentMsg.agent = null;
 }
 
@@ -870,39 +871,161 @@ function demoContextBar() {
 /* ============================================================
    VOICE
    ============================================================ */
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let voiceRecognition;
+let ttsVoices = [];
 let recording = false;
 const voiceBtn = $('voice-btn');
-let mediaRecorder;
-let recordedChunks = [];
 
-voiceBtn.addEventListener('click', async () => {
-  if (!navigator.mediaDevices) {
-    logTerminal('err', '[voice] not supported');
+function getTtsMode() {
+  return ($('speak-select') && $('speak-select').value) || 'off';
+}
+
+function getSelectedVoice() {
+  const sel = $('voice-select');
+  if (!sel || !sel.value) return null;
+  return ttsVoices.find(v => v.voiceURI === sel.value) || null;
+}
+
+function ttsBriefText(text) {
+  if (!text) return '';
+  const m = text.match(/^[^.!?]{1,100}[.!?]?/);
+  if (m) return m[0];
+  const words = text.trim().split(/\s+/);
+  return words.slice(0, 12).join(' ');
+}
+
+function ttsTextForMode(text, mode) {
+  if (mode === 'full') return text;
+  return ttsBriefText(text);
+}
+
+function speak(text) {
+  const mode = getTtsMode();
+  if (mode === 'off' || !window.speechSynthesis) return;
+  const toSay = ttsTextForMode(text, mode);
+  if (!toSay) return;
+
+  if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+    window.speechSynthesis.cancel();
+  }
+
+  const u = new SpeechSynthesisUtterance(toSay);
+  u.lang = 'ru-RU';
+  const voice = getSelectedVoice();
+  if (voice) u.voice = voice;
+  window.speechSynthesis.speak(u);
+}
+
+function populateVoiceSelect() {
+  const sel = $('voice-select');
+  if (!sel) return;
+  const saved = localStorage.getItem('sir-john-shell:voice-uri');
+  ttsVoices = window.speechSynthesis.getVoices();
+  sel.innerHTML = '';
+  const first = document.createElement('option');
+  first.value = '';
+  first.textContent = 'VOICE: default';
+  first.disabled = true;
+  sel.appendChild(first);
+  ttsVoices.forEach(v => {
+    const o = document.createElement('option');
+    o.value = v.voiceURI;
+    o.textContent = v.name;
+    if (saved && v.voiceURI === saved) o.selected = true;
+    sel.appendChild(o);
+  });
+  if (!saved) first.selected = true;
+}
+
+function initSpeakSelect() {
+  const sel = $('speak-select');
+  if (!sel) return;
+  const saved = localStorage.getItem('sir-john-shell:speak-mode') || 'off';
+  const modes = [
+    { value: 'off', name: 'SPEAK: OFF' },
+    { value: 'brief', name: 'SPEAK: brief' },
+    { value: 'full', name: 'SPEAK: full' }
+  ];
+  sel.innerHTML = '';
+  modes.forEach(m => {
+    const o = document.createElement('option');
+    o.value = m.value;
+    o.textContent = m.name;
+    if (m.value === saved) o.selected = true;
+    sel.appendChild(o);
+  });
+  sel.addEventListener('change', () => {
+    localStorage.setItem('sir-john-shell:speak-mode', sel.value);
+  });
+}
+
+function initVoiceSelect() {
+  const sel = $('voice-select');
+  if (!sel) return;
+  sel.addEventListener('change', () => {
+    localStorage.setItem('sir-john-shell:voice-uri', sel.value);
+  });
+}
+
+function initVoice() {
+  initSpeakSelect();
+  initVoiceSelect();
+
+  if ('onvoiceschanged' in window.speechSynthesis) {
+    window.speechSynthesis.onvoiceschanged = populateVoiceSelect;
+  }
+  populateVoiceSelect();
+
+  if (!SpeechRecognition) {
+    logTerminal('err', '[voice] SpeechRecognition not supported in this browser');
+    voiceBtn.style.display = 'none';
     return;
   }
-  if (!recording) {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaRecorder = new MediaRecorder(stream);
-      recordedChunks = [];
-      mediaRecorder.ondataavailable = (e) => recordedChunks.push(e.data);
-      mediaRecorder.onstop = async () => {
-        // TODO: send audio to Go endpoint for transcription
-        logTerminal('info', '[voice] recording stopped');
-      };
-      mediaRecorder.start();
-      recording = true;
-      voiceBtn.classList.add('recording');
-      logTerminal('info', '[voice] recording started');
-    } catch (err) {
-      logTerminal('err', '[voice] ' + err.message);
-    }
-  } else {
-    mediaRecorder.stop();
+
+  voiceRecognition = new SpeechRecognition();
+  voiceRecognition.continuous = false;
+  voiceRecognition.interimResults = false;
+  voiceRecognition.lang = 'ru-RU';
+
+  voiceRecognition.onstart = () => {
+    recording = true;
+    voiceBtn.classList.add('recording');
+    logTerminal('info', '[voice] listening...');
+  };
+
+  voiceRecognition.onend = () => {
     recording = false;
     voiceBtn.classList.remove('recording');
-  }
-});
+  };
+
+  voiceRecognition.onerror = (e) => {
+    recording = false;
+    voiceBtn.classList.remove('recording');
+    logTerminal('err', '[voice] ' + e.error);
+  };
+
+  voiceRecognition.onresult = (e) => {
+    const text = e.results[0][0].transcript;
+    if (text && socket) {
+      socket.send(JSON.stringify({ type: 'prompt', text }));
+      addUserMessage(text);
+      if ($('prompt')) $('prompt').value = '';
+    }
+  };
+
+  voiceBtn.addEventListener('click', () => {
+    if (!recording) {
+      voiceRecognition.start();
+    } else {
+      voiceRecognition.stop();
+    }
+  });
+}
+
+function stopTts() {
+  if (window.speechSynthesis) window.speechSynthesis.cancel();
+}
 
 function initHeaderControls() {
   $('mode-select').addEventListener('change', (e) => {
@@ -971,6 +1094,7 @@ function initDemo() {
   initSwap();
   initHeaderControls();
   initResizer();
+  initVoice();
   demoContextBar();
   // prepare Skills/Config sections
   const skills = $('panel-skills');

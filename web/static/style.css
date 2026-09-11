@@ -133,6 +133,7 @@ select.pill {
 select.pill:hover { border-color: var(--green); color: var(--green); }
 select.pill:focus { outline: none; border-color: var(--green); }
 select.pill option { background: #1a1a1a; color: #c0c0c0; }
+#voice-select, #speak-select { max-width: 120px; }
 
 .led {
   width: 8px;
