@@ -134,14 +134,17 @@ function highlightCode(name, content) {
    ============================================================ */
 function enrichText(text) {
   let s = esc(text);
-  // Wrap safely quoted strings, escaping the captured content.
-  s = s.replace(/`([^`]+)`/g, (m, g1) => `<code class="str">${esc(g1)}</code>`);
-  s = s.replace(/"([^"\\]|\\.)*"/g, m => `<span class="str">${esc(m)}</span>`);
-  s = s.replace(/'([^'\\]|\\.)*'/g, m => `<span class="str">${esc(m)}</span>`);
+  // Inline code: `text` -> <code>.text is already escaped.
+  s = s.replace(/`([^`]+)`/g, (m, g1) => `<code class="str">${g1}</code>`);
+  // Links before other spans.
   s = s.replace(/(https?:\/\/\S+)/g, '<a class="typ" href="$1" target="_blank">$1</a>');
+  // Paths, files, numbers.
   s = s.replace(/(\/(?:[A-Za-z0-9_.\-]+(?:\/|$))+)/g, '<span class="typ">$1</span>');
   s = s.replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="num">$1</span>');
   s = s.replace(/\b([A-Za-z0-9_-]+\.(go|css|js|json|html|md|txt|mod|sum))\b/g, '<span class="typ">$1</span>');
+  // Markdown: bold and italic.
+  s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
   return s;
 }
 
