@@ -161,6 +161,7 @@ document.querySelectorAll('.sw').forEach(btn => {
    CHAT
    ============================================================ */
 const currentMsg = { agent: null, thought: null };
+let sessionCwd = '';
 
 function addUserMessage(text) {
   const el = document.createElement('div');
@@ -183,7 +184,7 @@ function ensureAgentMessage() {
 
 function appendAgentText(text) {
   const span = ensureAgentMessage();
-  span.textContent += text;
+  span.textContent = joinText(span.textContent, text);
   autoScroll($('chat-body'));
 }
 
@@ -208,7 +209,7 @@ function ensureThought() {
 
 function appendThought(text) {
   const t = ensureThought();
-  t.textContent += text;
+  t.textContent = joinText(t.textContent, text);
   autoScroll($('thoughts-body'));
 }
 
@@ -268,13 +269,24 @@ function renderTree(files) {
     const row = document.createElement('div');
     row.className = f.dir ? 'f dir' : 'f';
     row.textContent = (f.dir ? '[D] ' : '[F] ') + f.name;
-    row.addEventListener('click', () => showFile(f.name, f.content || '// empty'));
+    row.addEventListener('click', () => {
+      if (!socket) return;
+      if (f.dir) {
+        socket.send(JSON.stringify({ type: 'read_dir', name: f.name }));
+      } else {
+        socket.send(JSON.stringify({ type: 'read_file', name: f.name }));
+      }
+    });
     tree.appendChild(row);
   });
 }
 
-function showFile(name, content) {
+function showFile(name, content, err) {
   const file = $('ws-file');
+  if (err) {
+    file.innerHTML = `<div style="color:#ff5f56;">${esc(name)}: ${esc(err)}</div>`;
+    return;
+  }
   const highlighted = highlightCode(name, content);
   file.innerHTML = `<div style="color:#666;margin-bottom:6px;">${esc(name)}</div>` +
                    `<pre class="code-block" style="white-space:pre-wrap;">${highlighted}</pre>`;
@@ -362,8 +374,22 @@ function handleMessage(msg) {
   // Server welcome
   if (msg.type === 'welcome') {
     $('session-pill').textContent = 'SESSION: ' + msg.sessionId;
-    $('ws-path').textContent = msg.cwd;
+    sessionCwd = msg.cwd;
+    $('ws-path').textContent = sessionCwd;
     logTerminal('info', '[session] ' + msg.sessionId);
+    return;
+  }
+
+  // Workspace file list
+  if (msg.type === 'workspace') {
+    renderTree(msg.files || []);
+    $('ws-path').textContent = msg.path ? msg.path : sessionCwd;
+    return;
+  }
+
+  // File content
+  if (msg.type === 'file') {
+    showFile(msg.name, msg.content, msg.err);
     return;
   }
 
@@ -454,6 +480,23 @@ function chunkText(content) {
   if (content.type === 'text' && content.text) return content.text;
   return JSON.stringify(content);
 }
+
+function joinText(prev, next) {
+  if (!prev) return next;
+  if (!next) return prev;
+  const last = prev.slice(-1);
+  const first = next.charAt(0);
+  if (last === ' ' || last === '\n' || first === ' ' || first === '\n' || first === '\t' || first === '\r') {
+    return prev + next;
+  }
+  if (isSentenceEnd(last) && isUpper(first)) {
+    return prev + ' ' + next;
+  }
+  return prev + next;
+}
+
+function isSentenceEnd(c) { return c === '.' || c === '!' || c === '?'; }
+function isUpper(c) { return c >= 'A' && c <= 'Z'; }
 
 function populateSelect(id, label, opt) {
   const sel = $(id);
@@ -593,22 +636,12 @@ function initHeaderControls() {
 }
 
 /* ============================================================
-   DEMO INIT
+   INIT
    ============================================================ */
 function initDemo() {
   initSwap();
   initHeaderControls();
   demoContextBar();
-  renderTree([
-    { name: 'cmd', dir: true },
-    { name: 'internal', dir: true },
-    { name: 'web', dir: true },
-    { name: 'go.mod', dir: false, content: 'module sir-john-shell\n\ngo 1.26.5' },
-    { name: 'main.go', dir: false, content: 'package main\n\nimport (\n\t"fmt"\n)\n\nfunc main() {\n\tfmt.Println("boot")\n}' },
-    { name: 'style.css', dir: false, content: 'body {\n  background: #0a0a0a;\n  color: #9ac16a;\n}\n\n.title {\n  font-size: 13px;\n}' },
-    { name: 'README.md', dir: false, content: '# Sir John Shell\n\nBrowser-native UI for Devin. Single Go binary.' }
-  ]);
-  showFile('main.go', 'package main\n\nimport (\n\t"fmt"\n)\n\nfunc main() {\n\tfmt.Println("boot")\n}');
   connect();
 }
 

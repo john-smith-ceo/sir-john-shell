@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -95,6 +97,54 @@ func staticFS() (http.FileSystem, error) {
 	return web.StaticFS()
 }
 
+func safePath(cwd, name string) (string, error) {
+	if filepath.IsAbs(name) || strings.Contains(name, "..") {
+		return "", fmt.Errorf("invalid path: %s", name)
+	}
+	return filepath.Join(cwd, name), nil
+}
+
+// sendWorkspace lists the given subdirectory and sends it to the client.
+func (s *Server) sendWorkspace(c *Client, dir string) {
+	path, err := safePath(s.cwd, dir)
+	if err != nil {
+		log.Printf("read dir: %v", err)
+		return
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		log.Printf("read dir %s: %v", path, err)
+		return
+	}
+	var files []map[string]any
+	for _, e := range entries {
+		files = append(files, map[string]any{
+			"name": filepath.Join(dir, e.Name()),
+			"dir":  e.IsDir(),
+		})
+	}
+	data, _ := json.Marshal(map[string]any{"type": "workspace", "files": files, "path": dir})
+	c.send <- data
+}
+
+// sendFile reads a file and sends its contents to the client.
+func (s *Server) sendFile(c *Client, name string) {
+	path, err := safePath(s.cwd, name)
+	if err != nil {
+		data, _ := json.Marshal(map[string]any{"type": "file", "name": name, "err": err.Error()})
+		c.send <- data
+		return
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		data, _ := json.Marshal(map[string]any{"type": "file", "name": name, "err": err.Error()})
+		c.send <- data
+		return
+	}
+	data, _ := json.Marshal(map[string]any{"type": "file", "name": name, "content": string(content)})
+	c.send <- data
+}
+
 // forwardACP reads ACP notifications and broadcasts them to WebSocket clients.
 func (s *Server) forwardACP() {
 	for msg := range s.acp.Notifications() {
@@ -132,6 +182,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		"cwd":       s.cwd,
 	})
 	client.send <- welcome
+	// Send initial workspace tree.
+	s.sendWorkspace(client, "")
 
 	go client.writePump()
 	client.readPump(s)
@@ -183,6 +235,14 @@ func (c *Client) readPump(s *Server) {
 				log.Printf("cancel: %v", err)
 			}
 			cancel()
+		case "read_file":
+			name, _ := msg["name"].(string)
+			if name != "" {
+				s.sendFile(c, name)
+			}
+		case "read_dir":
+			name, _ := msg["name"].(string)
+			s.sendWorkspace(c, name)
 		default:
 			log.Printf("unknown ws message type: %s", msgType)
 		}

@@ -173,11 +173,32 @@ func (m *model) appendChunk(kind, text string) {
 		return
 	}
 	if n := len(m.messages); n > 0 && m.messages[n-1].kind == kind {
-		m.messages[n-1].text += text
+		m.messages[n-1].text = joinText(m.messages[n-1].text, text)
 		return
 	}
 	m.append(kind, text)
 }
+
+func joinText(prev, next string) string {
+	if prev == "" {
+		return next
+	}
+	if next == "" {
+		return prev
+	}
+	last := prev[len(prev)-1]
+	first := next[0]
+	if last == ' ' || last == '\n' || first == ' ' || first == '\n' || first == '\t' || first == '\r' {
+		return prev + next
+	}
+	if isSentenceEnd(last) && isUpper(first) {
+		return prev + " " + next
+	}
+	return prev + next
+}
+
+func isSentenceEnd(c byte) bool { return c == '.' || c == '!' || c == '?' }
+func isUpper(c byte) bool       { return c >= 'A' && c <= 'Z' }
 
 func (m *model) updateViewport() {
 	lines := make([]string, 0, len(m.messages))
