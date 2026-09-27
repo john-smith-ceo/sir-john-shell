@@ -2,7 +2,7 @@
 
 ## Project
 
-- Repository path: `/home/vlad/Projects/sir-john-shell`
+- Repository path: `/home/vlad/Projects/global/sir-john-shell`
 - Module: `sir-john-shell`
 - Binary: `./sir-john-shell`
 - Default listen address: `127.0.0.1:8080`
@@ -12,7 +12,7 @@
 ### Local
 
 ```bash
-cd /home/vlad/Projects/sir-john-shell
+cd /home/vlad/Projects/global/sir-john-shell
 go build -o sir-john-shell ./cmd/sir-john-shell
 ```
 
