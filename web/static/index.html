@@ -15,8 +15,18 @@
   <div class="sys-info">
     <span class="pill dim" id="session-pill">SESSION: —</span>
     <span class="pill" id="conn-pill"><span class="led ok"></span> ONLINE</span>
-    <select class="pill" id="voice-select"><option value="">VOICE: —</option></select>
-    <select class="pill" id="speak-select"><option value="off">SPEAK: OFF</option></select>
+    <select class="pill" id="theme-scheme" title="Color scheme">
+      <option value="">SCHEME: CUSTOM</option>
+      <option value="khaki">SCHEME: KHAKI</option>
+      <option value="monokai">SCHEME: MONOKAI</option>
+      <option value="dracula">SCHEME: DRACULA</option>
+      <option value="nord">SCHEME: NORD</option>
+      <option value="solarized">SCHEME: SOLARIZED</option>
+    </select>
+    <button class="pill theme-button" id="theme-load" type="button">THEME: LOAD</button>
+    <a class="pill theme-dev-button" id="theme-dev" href="polygon.html?dev=1" hidden>UX/UI</a>
+    <button class="pill power-button" id="power-off" type="button" title="Shutdown this Sir John Shell session">POWER OFF</button>
+    <input id="theme-file" type="file" accept="application/json,.json" hidden>
   </div>
 </header>
 
@@ -51,13 +61,18 @@
           </section>
 
           <section class="view" id="view-skills">
-            <header class="titlebar"><span class="title">SKILLS / CONFIG</span></header>
+            <header class="titlebar"><span class="title">SKILLS</span></header>
             <div class="body" id="panel-skills"></div>
+          </section>
+
+          <section class="view" id="view-config">
+            <header class="titlebar"><span class="title">CONFIG</span></header>
+            <div class="body" id="panel-config"></div>
           </section>
 
           <section class="view" id="view-preview">
             <header class="titlebar">
-              <span class="title" id="preview-title">PREVIEW</span>
+              <span class="title" id="preview-title">MD VIEWER</span>
               <button class="preview-back" id="preview-back">← BACK</button>
             </header>
             <div class="body" id="preview-body"></div>
@@ -102,13 +117,24 @@
         <button class="sw" data-view="terminal"><span class="num">2</span>TERMINAL</button>
         <button class="sw" data-view="tools"><span class="num">3</span>TOOLS</button>
         <button class="sw" data-view="skills"><span class="num">4</span>SKILLS</button>
-        <button class="sw" data-view="preview"><span class="num">5</span>PREVIEW</button>
+        <button class="sw" data-view="config"><span class="num">5</span>CONFIG</button>
+        <button class="sw" data-view="preview"><span class="num">6</span>MD VIEWER</button>
       </nav>
     </div>
 
   </div>
 </main>
 
+<section id="power-off-screen" class="power-off-screen" hidden>
+  <div class="power-off-card">
+    <div class="power-off-mark">◉</div>
+    <div class="power-off-title">POWER OFF</div>
+    <div class="power-off-subtitle">Sir John Shell session is not running.</div>
+    <button id="power-retry" type="button">RECONNECT</button>
+  </div>
+</section>
+
+<script src="theme.js"></script>
 <script src="main.js"></script>
 </body>
 </html>

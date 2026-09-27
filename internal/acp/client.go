@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"os/exec"
 	"sync"
 	"sync/atomic"
@@ -34,6 +35,7 @@ func NewClient(ctx context.Context, devinBinary string, args []string) (*Client,
 	}
 	cmdArgs := append([]string{"acp"}, args...)
 	cmd := exec.CommandContext(ctx, devinBinary, cmdArgs...)
+	cmd.Stderr = os.Stderr
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -67,9 +69,9 @@ func NewClient(ctx context.Context, devinBinary string, args []string) (*Client,
 // Initialize sends the ACP initialize request.
 func (c *Client) Initialize(ctx context.Context) (*InitializeResponse, error) {
 	req := &InitializeRequest{
-		ProtocolVersion: 1,
-		Capabilities:    map[string]any{},
-		Info: ImplementationInfo{
+		ProtocolVersion:    1,
+		ClientCapabilities: map[string]any{},
+		ClientInfo: ImplementationInfo{
 			Name:    "sir-john-shell",
 			Title:   "Sir John Shell",
 			Version: "0.1.0",

@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"sir-john-shell/internal/acp"
+	"sir-john-shell/internal/config"
 	"sir-john-shell/web"
 )
 
@@ -35,6 +38,10 @@ type Server struct {
 	userName string
 	acp      *acp.Client
 	session  string
+	logDir   string
+	onStop   func()
+	httpSrv  *http.Server
+	ready    chan struct{}
 	hub      *Hub
 }
 
@@ -58,7 +65,7 @@ type Client struct {
 }
 
 // New creates a server.
-func New(addr, cwd, userName string, acpClient *acp.Client, sessionID string) *Server {
+func New(addr, cwd, userName string, acpClient *acp.Client, sessionID, logDir string, onStop func()) *Server {
 	h := &Hub{
 		clients:  make(map[*Client]bool),
 		sessions: make(map[string]map[*Client]bool),
@@ -70,6 +77,9 @@ func New(addr, cwd, userName string, acpClient *acp.Client, sessionID string) *S
 		userName: userName,
 		acp:      acpClient,
 		session:  sessionID,
+		logDir:   logDir,
+		onStop:   onStop,
+		ready:    make(chan struct{}),
 		hub:      h,
 	}
 }
@@ -84,6 +94,10 @@ func (s *Server) Run() error {
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(fs))
 	mux.HandleFunc("/ws", s.handleWebSocket)
+	mux.HandleFunc("/api/config", s.handleConfig)
+	if s.logDir != "" {
+		mux.HandleFunc("/debug/theme-log", s.handleThemeLog)
+	}
 
 	go s.forwardACP()
 
@@ -92,8 +106,112 @@ func (s *Server) Run() error {
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	listener, err := net.Listen("tcp", s.addr)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", s.addr, err)
+	}
+	s.httpSrv = srv
+	close(s.ready)
 	log.Printf("sir-john-shell listening on %s", s.addr)
-	return srv.ListenAndServe()
+	err = srv.Serve(listener)
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
+}
+
+func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	cfg, err := config.Load()
+	if err != nil {
+		http.Error(w, "cannot load config", http.StatusInternalServerError)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(cfg)
+	case http.MethodPut:
+		defer r.Body.Close()
+		var incoming config.UserConfig
+		if err := json.NewDecoder(io.LimitReader(r.Body, 2<<20)).Decode(&incoming); err != nil {
+			http.Error(w, "invalid config", http.StatusBadRequest)
+			return
+		}
+		if incoming.User != "" {
+			cfg.User = incoming.User
+		}
+		cfg.FontFamily = incoming.FontFamily
+		cfg.Theme = incoming.Theme
+		cfg.UI = incoming.UI
+		if err := config.Save(cfg); err != nil {
+			http.Error(w, "cannot save config", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+// Ready is closed after the HTTP listener has successfully bound its address.
+func (s *Server) Ready() <-chan struct{} {
+	return s.ready
+}
+
+func (s *Server) shutdown() {
+	shutdownMsg, _ := json.Marshal(map[string]any{"type": "server_shutdown"})
+	s.hub.broadcast(s.session, shutdownMsg)
+	if s.onStop != nil {
+		s.onStop()
+	}
+	if s.httpSrv != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = s.httpSrv.Shutdown(ctx)
+	}
+}
+
+type themeLogEvent struct {
+	Event string         `json:"event"`
+	Data  map[string]any `json:"data,omitempty"`
+}
+
+func (s *Server) handleThemeLog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	defer r.Body.Close()
+	var event themeLogEvent
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 16*1024))
+	if err := decoder.Decode(&event); err != nil || event.Event == "" {
+		http.Error(w, "invalid theme log event", http.StatusBadRequest)
+		return
+	}
+	if err := os.MkdirAll(s.logDir, 0o700); err != nil {
+		http.Error(w, "log directory unavailable", http.StatusInternalServerError)
+		return
+	}
+	entry := map[string]any{"ts": time.Now().UTC().Format(time.RFC3339Nano), "event": event.Event}
+	if event.Data != nil {
+		entry["data"] = event.Data
+	}
+	line, err := json.Marshal(entry)
+	if err != nil {
+		http.Error(w, "cannot encode theme log event", http.StatusInternalServerError)
+		return
+	}
+	file, err := os.OpenFile(filepath.Join(s.logDir, "theme-flow.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		http.Error(w, "cannot open theme log", http.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
+	if _, err := file.Write(append(line, '\n')); err != nil {
+		http.Error(w, "cannot write theme log", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // staticFS returns the embedded front-end filesystem.
@@ -105,10 +223,14 @@ func staticFS() (http.FileSystem, error) {
 }
 
 func safePath(cwd, name string) (string, error) {
-	if filepath.IsAbs(name) || strings.Contains(name, "..") {
+	if filepath.IsAbs(name) {
 		return "", fmt.Errorf("invalid path: %s", name)
 	}
-	return filepath.Join(cwd, name), nil
+	clean := filepath.Clean(name)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid path: %s", name)
+	}
+	return filepath.Join(cwd, clean), nil
 }
 
 // sendWorkspace lists the given subdirectory and sends it to the client.
@@ -130,7 +252,15 @@ func (s *Server) sendWorkspace(c *Client, dir string) {
 			"dir":  e.IsDir(),
 		})
 	}
-	data, _ := json.Marshal(map[string]any{"type": "workspace", "files": files, "path": dir})
+	parent := ""
+	cleanDir := filepath.Clean(dir)
+	if cleanDir != "." && cleanDir != "" {
+		parent = filepath.ToSlash(filepath.Dir(cleanDir))
+		if parent == "." {
+			parent = ""
+		}
+	}
+	data, _ := json.Marshal(map[string]any{"type": "workspace", "files": files, "path": dir, "parent": parent})
 	c.send <- data
 }
 
@@ -186,7 +316,7 @@ func readFirstLines(path string, n int, maxSize int) ([]byte, int, error) {
 }
 
 // sendFile reads a file and sends its contents to the client.
-func (s *Server) sendFile(c *Client, name string) {
+func (s *Server) sendFile(c *Client, name string, full bool) {
 	path, err := safePath(s.cwd, name)
 	if err != nil {
 		data, _ := json.Marshal(map[string]any{"type": "file", "name": name, "err": err.Error()})
@@ -222,7 +352,11 @@ func (s *Server) sendFile(c *Client, name string) {
 		return
 	}
 
-	content, lines, err := readFirstLines(path, maxFileLines, maxFileReadSize)
+	lineLimit, sizeLimit := maxFileLines, maxFileReadSize
+	if full {
+		lineLimit, sizeLimit = 100000, 2*1024*1024
+	}
+	content, lines, err := readFirstLines(path, lineLimit, sizeLimit)
 	if err != nil {
 		data, _ := json.Marshal(map[string]any{"type": "file", "name": name, "err": err.Error()})
 		c.send <- data
@@ -240,6 +374,7 @@ func (s *Server) sendFile(c *Client, name string) {
 		"total":   lines,
 		"binary":  false,
 		"size":    info.Size(),
+		"full":    full,
 	}
 	if isMarkdown {
 		payload["markdown"] = true
@@ -345,10 +480,15 @@ func (c *Client) readPump(s *Server) {
 				log.Printf("cancel: %v", err)
 			}
 			cancel()
+		case "shutdown":
+			log.Printf("shutdown requested by browser")
+			go s.shutdown()
+			return
 		case "read_file":
 			name, _ := msg["name"].(string)
 			if name != "" {
-				s.sendFile(c, name)
+				full, _ := msg["full"].(bool)
+				s.sendFile(c, name, full)
 			}
 		case "read_dir":
 			name, _ := msg["name"].(string)

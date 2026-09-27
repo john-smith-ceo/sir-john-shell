@@ -20,6 +20,8 @@ done
 
 rm -f "$INSTALL_DIR/$BIN"
 echo "Removed $INSTALL_DIR/$BIN"
+rm -f "$INSTALL_DIR/devin-cli" "$INSTALL_DIR/devin-web"
+echo "Removed Sir John Shell command wrappers"
 
 for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
   if [[ -f "$rc" ]]; then

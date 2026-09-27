@@ -19,3 +19,6 @@
 
 # release builds
 /dist/
+
+# local diagnostics
+/logs/*.jsonl

@@ -79,11 +79,42 @@ go build -o sir-john-shell ./cmd/sir-john-shell
 
 The server listens on `127.0.0.1:8080` by default. Open `http://127.0.0.1:8080` in a browser in `web`/`headless` mode.
 
+## Themes and UX polygon
+
+Open `http://127.0.0.1:8080/polygon.html` to tune the visual theme without an ACP session.
+Use `DOWNLOAD JSON` to export the result. In the main UI, click `THEME: LOAD` and select
+the exported JSON file. The loaded theme is applied immediately and persisted in browser
+`localStorage` for the current origin.
+
+Theme files use the `sir-john-shell-theme` format, version `1`, and contain the palette
+and text brightness. Polygon may additionally export an explicit `ui` section for
+surfaces, chat frames and effects; selecting a color scheme alone does not alter it.
+The main UI accepts older raw polygon state as well as the versioned format.
+The active shell profile is stored in `~/.sir-john-shell/config`: it contains
+`fontFamily`, `theme`, and the Polygon `ui` settings. The same profile is used
+by the main UI and the UX/UI polygon; browser `localStorage` remains only a
+compatibility fallback.
+
 ## CLI flags
 
 - `-addr` — HTTP listen address (default `127.0.0.1:8080`).
 - `-cwd` — working directory for the ACP session (default current directory).
 - `-devin` — path to the `devin` CLI binary (default `devin`).
+- `-log=on|off` — enable or disable theme-flow diagnostics; logs go to `./logs/`.
+
+For a logged UX/theme test run:
+
+```bash
+devin-web -dev -log=on
+```
+
+The `-dev` flag adds the `UX/UI` entrypoint to the top bar. It opens the polygon
+in the same browser session, where `APPLY` returns to the main UI with the new
+theme, and `CANCEL` returns without applying polygon changes.
+
+Events are written to `./logs/theme-flow.jsonl`; no prompts, file contents, or credentials are logged.
+The `logs/` directory is intentionally project-local: it keeps one reproducible UX test
+run beside the project and is ignored by Git except for this README.
 
 ## Architecture
 

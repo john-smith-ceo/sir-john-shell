@@ -37,9 +37,9 @@ type AuthMethod struct {
 
 // InitializeRequest is the ACP initialize method request.
 type InitializeRequest struct {
-	ProtocolVersion int                `json:"protocolVersion"`
-	Capabilities    map[string]any     `json:"capabilities"`
-	Info            ImplementationInfo `json:"info"`
+	ProtocolVersion    int                `json:"protocolVersion"`
+	ClientCapabilities map[string]any     `json:"clientCapabilities"`
+	ClientInfo         ImplementationInfo `json:"clientInfo"`
 }
 
 // InitializeResponse is the ACP initialize method response.

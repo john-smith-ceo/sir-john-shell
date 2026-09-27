@@ -50,6 +50,24 @@ else
   echo "Installed: $INSTALL_DIR/$BIN"
 fi
 
+chmod +x "$INSTALL_DIR/$BIN"
+
+if [[ -e "$INSTALL_DIR/devin-cli" || -L "$INSTALL_DIR/devin-cli" ]]; then
+  rm -f "$INSTALL_DIR/devin-cli"
+fi
+cat > "$INSTALL_DIR/devin-cli" <<EOF
+#!/usr/bin/env bash
+exec "$HOME/.local/bin/devin" "\$@"
+EOF
+chmod +x "$INSTALL_DIR/devin-cli"
+
+cat > "$INSTALL_DIR/devin-web" <<EOF
+#!/usr/bin/env bash
+exec "$INSTALL_DIR/$BIN" -mode=web "\$@"
+EOF
+chmod +x "$INSTALL_DIR/devin-web"
+rm -f "$INSTALL_DIR/mistral-cli" "$INSTALL_DIR/mistral-web"
+
 if [[ ! -f "$CONFIG_FILE" ]]; then
   printf '{"user":"%s"}\n' "$USER_NAME" > "$CONFIG_FILE"
   echo "Created $CONFIG_FILE"
@@ -57,22 +75,21 @@ else
   echo "Config already exists: $CONFIG_FILE"
 fi
 
-LAUNCHER="# Sir John Shell launcher
+LAUNCHER="# Sir John Shell commands
 export SJS_USER=\"\${SJS_USER:-$USER_NAME}\"
-devin() {
-  if [ \$# -eq 0 ]; then
-    $INSTALL_DIR/$BIN
-  else
-    command devin \"\$@\"
-  fi
-}
+alias devin-cli=\"$INSTALL_DIR/devin-cli\"
+alias devin-web=\"$INSTALL_DIR/devin-web\"
 alias sjs=\"$INSTALL_DIR/$BIN\"
-# End Sir John Shell launcher"
+# End Sir John Shell commands"
 
 for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
   if [[ -f "$rc" ]]; then
     if grep -q "# Sir John Shell launcher" "$rc"; then
       sed -i.bak '/# Sir John Shell launcher/,/# End Sir John Shell launcher/d' "$rc"
+      rm -f "$rc.bak"
+    fi
+    if grep -q "# Sir John Shell commands" "$rc"; then
+      sed -i.bak '/# Sir John Shell commands/,/# End Sir John Shell commands/d' "$rc"
       rm -f "$rc.bak"
     fi
     printf '\n%s\n' "$LAUNCHER" >> "$rc"
@@ -83,4 +100,4 @@ done
 echo ""
 echo "Sir John Shell installed."
 echo "Run: source ~/.zshrc  (or ~/.bashrc)"
-echo "Then: devin"
+echo "Then: devin-web"

@@ -308,7 +308,6 @@ function finalizeAgentMessage() {
   const span = currentMsg.agent;
   const text = span.textContent;
   span.innerHTML = enrichText(text);
-  speak(text);
   currentMsg.agent = null;
 }
 
@@ -467,9 +466,18 @@ function el(tag, cls, text) {
 /* ============================================================
    WORKSPACE
    ============================================================ */
-function renderTree(files) {
+function renderTree(files, path, parent) {
   const tree = $('ws-tree');
   tree.innerHTML = '';
+  if (path) {
+    const row = document.createElement('div');
+    row.className = 'f dir';
+    row.textContent = '[D] ..';
+    row.addEventListener('click', () => {
+      if (socket) socket.send(JSON.stringify({ type: 'read_dir', name: parent }));
+    });
+    tree.appendChild(row);
+  }
   files.forEach(f => {
     const row = document.createElement('div');
     row.className = f.dir ? 'f dir' : 'f';
@@ -486,12 +494,49 @@ function renderTree(files) {
   });
 }
 
+function renderWorkspaceFile(name, content, err, meta) {
+  const pane = $('ws-file');
+  if (!pane) return;
+  pane.innerHTML = '';
+  if (err) {
+    pane.textContent = err;
+    return;
+  }
+  if (meta && meta.binary) {
+    pane.textContent = `Binary file (${meta.size || '?'} bytes) cannot be previewed.`;
+    return;
+  }
+  const head = document.createElement('div');
+  head.className = 'file-preview-head';
+  const title = document.createElement('span');
+  title.textContent = name;
+  head.appendChild(title);
+  const view = document.createElement('button');
+  view.textContent = 'VIEW';
+  view.addEventListener('click', () => {
+    if (socket) socket.send(JSON.stringify({ type: 'read_file', name, full: true }));
+  });
+  head.appendChild(view);
+  pane.appendChild(head);
+  const pre = document.createElement('pre');
+  pre.className = 'code-block preview-code';
+  pre.innerHTML = meta && meta.markdown ? esc(content) : highlightCode(name, content);
+  pane.appendChild(pre);
+  if (meta && meta.truncated) {
+    const note = document.createElement('div');
+    note.className = 'preview-truncated';
+    note.textContent = `Showing first ${meta.lines || 0} lines.`;
+    pane.appendChild(note);
+  }
+}
+
 function showFile(name, content, err, meta) {
   const body = $('preview-body');
   const title = $('preview-title');
   const preview = $('view-preview');
 
   if (err) {
+    if (!meta || !meta.full) renderWorkspaceFile(name, content, err, meta);
     title.textContent = 'PREVIEW';
     body.innerHTML = `<div style="color:#ff5f56;padding:10px;">${esc(name)}: ${esc(err)}</div>`;
     switchView('preview');
@@ -499,9 +544,15 @@ function showFile(name, content, err, meta) {
   }
 
   if (meta && meta.binary) {
+    if (!meta.full) renderWorkspaceFile(name, content, null, meta);
     title.textContent = 'PREVIEW: ' + esc(name);
     body.innerHTML = `<div style="color:#888;padding:10px;">Binary file (${esc(String(meta.size || '?'))} bytes) cannot be previewed.</div>`;
     switchView('preview');
+    return;
+  }
+
+  if (!meta || !meta.full) {
+    renderWorkspaceFile(name, content, null, meta);
     return;
   }
 
@@ -555,6 +606,7 @@ function sendPrompt() {
    WEBSOCKET
    ============================================================ */
 let socket;
+let powerOffShown = false;
 
 function timeNow() {
   const d = new Date();
@@ -574,7 +626,7 @@ function connect() {
   socket.onclose = (e) => {
     if (e.code === 1008) {
       document.body.innerHTML = `
-        <div style="display:flex;justify-content:center;align-items:center;height:100vh;background:#0a0a0a;color:#9ac16a;font-family:ui-monospace,monospace;font-size:16px;text-align:center;padding:20px;box-sizing:border-box;">
+        <div style="display:flex;justify-content:center;align-items:center;height:100vh;background:#141414;color:#9ac16a;font-family:ui-monospace,monospace;font-size:16px;text-align:center;padding:20px;box-sizing:border-box;">
           <div>
             <div style="font-size:24px;margin-bottom:12px;">SIR JOHN SHELL</div>
             <div>Уже запущено в другой вкладке или окне.</div>
@@ -583,9 +635,7 @@ function connect() {
         </div>`;
       return;
     }
-    $('conn-pill').innerHTML = '<span class="led" style="background:#666"></span> OFFLINE';
-    logTerminal('warn', '[ws] disconnected');
-    setTimeout(connect, 3000);
+    if (!powerOffShown) showPowerOff('connection closed');
   };
 
   socket.onerror = (e) => {
@@ -607,6 +657,11 @@ function connect() {
 }
 
 function handleMessage(msg) {
+  if (msg.type === 'server_shutdown') {
+    showPowerOff('server shutdown');
+    if (socket) socket.close();
+    return;
+  }
   // Server welcome
   if (msg.type === 'welcome') {
     $('session-pill').textContent = 'SESSION: ' + msg.sessionId;
@@ -619,7 +674,7 @@ function handleMessage(msg) {
 
   // Workspace file list
   if (msg.type === 'workspace') {
-    renderTree(msg.files || []);
+    renderTree(msg.files || [], msg.path || '', msg.parent || '');
     $('ws-path').textContent = msg.path ? msg.path : sessionCwd;
     return;
   }
@@ -631,7 +686,8 @@ function handleMessage(msg) {
       markdown: msg.markdown,
       truncated: msg.truncated,
       lines: msg.lines,
-      size: msg.size
+      size: msg.size,
+      full: msg.full
     });
     return;
   }
@@ -715,6 +771,13 @@ function handleMessage(msg) {
   } else {
     logTerminal('info', `[${method}] ${JSON.stringify(params).slice(0,80)}`);
   }
+}
+
+function showPowerOff(reason) {
+  powerOffShown = true;
+  const screen = $('power-off-screen');
+  if (screen) screen.hidden = false;
+  logTerminal('warn', '[session] POWER OFF: ' + reason);
 }
 
 function chunkText(content) {
@@ -873,113 +936,13 @@ function demoContextBar() {
    ============================================================ */
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let voiceRecognition;
-let ttsVoices = [];
 let recording = false;
 const voiceBtn = $('voice-btn');
 
-function getTtsMode() {
-  return ($('speak-select') && $('speak-select').value) || 'off';
-}
-
-function getSelectedVoice() {
-  const sel = $('voice-select');
-  if (!sel || !sel.value) return null;
-  return ttsVoices.find(v => v.voiceURI === sel.value) || null;
-}
-
-function ttsBriefText(text) {
-  if (!text) return '';
-  const m = text.match(/^[^.!?]{1,100}[.!?]?/);
-  if (m) return m[0];
-  const words = text.trim().split(/\s+/);
-  return words.slice(0, 12).join(' ');
-}
-
-function ttsTextForMode(text, mode) {
-  if (mode === 'full') return text;
-  return ttsBriefText(text);
-}
-
-function speak(text) {
-  const mode = getTtsMode();
-  if (mode === 'off' || !window.speechSynthesis) return;
-  const toSay = ttsTextForMode(text, mode);
-  if (!toSay) return;
-
-  if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
-    window.speechSynthesis.cancel();
-  }
-
-  const u = new SpeechSynthesisUtterance(toSay);
-  u.lang = 'ru-RU';
-  const voice = getSelectedVoice();
-  if (voice) u.voice = voice;
-  window.speechSynthesis.speak(u);
-}
-
-function populateVoiceSelect() {
-  const sel = $('voice-select');
-  if (!sel) return;
-  const saved = localStorage.getItem('sir-john-shell:voice-uri');
-  ttsVoices = window.speechSynthesis.getVoices();
-  sel.innerHTML = '';
-  const first = document.createElement('option');
-  first.value = '';
-  first.textContent = 'VOICE: default';
-  first.disabled = true;
-  sel.appendChild(first);
-  ttsVoices.forEach(v => {
-    const o = document.createElement('option');
-    o.value = v.voiceURI;
-    o.textContent = v.name;
-    if (saved && v.voiceURI === saved) o.selected = true;
-    sel.appendChild(o);
-  });
-  if (!saved) first.selected = true;
-}
-
-function initSpeakSelect() {
-  const sel = $('speak-select');
-  if (!sel) return;
-  const saved = localStorage.getItem('sir-john-shell:speak-mode') || 'off';
-  const modes = [
-    { value: 'off', name: 'SPEAK: OFF' },
-    { value: 'brief', name: 'SPEAK: brief' },
-    { value: 'full', name: 'SPEAK: full' }
-  ];
-  sel.innerHTML = '';
-  modes.forEach(m => {
-    const o = document.createElement('option');
-    o.value = m.value;
-    o.textContent = m.name;
-    if (m.value === saved) o.selected = true;
-    sel.appendChild(o);
-  });
-  sel.addEventListener('change', () => {
-    localStorage.setItem('sir-john-shell:speak-mode', sel.value);
-  });
-}
-
-function initVoiceSelect() {
-  const sel = $('voice-select');
-  if (!sel) return;
-  sel.addEventListener('change', () => {
-    localStorage.setItem('sir-john-shell:voice-uri', sel.value);
-  });
-}
-
 function initVoice() {
-  initSpeakSelect();
-  initVoiceSelect();
-
-  if ('onvoiceschanged' in window.speechSynthesis) {
-    window.speechSynthesis.onvoiceschanged = populateVoiceSelect;
-  }
-  populateVoiceSelect();
-
-  if (!SpeechRecognition) {
+  if (!SpeechRecognition || !voiceBtn) {
     logTerminal('err', '[voice] SpeechRecognition not supported in this browser');
-    voiceBtn.style.display = 'none';
+    if (voiceBtn) voiceBtn.style.display = 'none';
     return;
   }
 
@@ -1023,8 +986,127 @@ function initVoice() {
   });
 }
 
-function stopTts() {
-  if (window.speechSynthesis) window.speechSynthesis.cancel();
+function initTheme() {
+  const loadButton = $('theme-load');
+  const fileInput = $('theme-file');
+  if (!loadButton || !fileInput) return;
+  const schemeSelect = $('theme-scheme');
+  const devButton = $('theme-dev');
+  if (devButton && new URLSearchParams(location.search).get('dev') === '1') {
+    devButton.hidden = false;
+    devButton.addEventListener('click', saveUiSnapshot);
+  }
+
+  let shellConfig = {};
+
+  const saved = localStorage.getItem('sir-john-shell:theme');
+  sjsDebugLog('main_theme_init', { hasSavedTheme: Boolean(saved) });
+  if (saved) {
+    try { applyTheme(JSON.parse(saved), 'localStorage', false); } catch (err) {
+      sjsDebugLog('main_theme_error', { stage: 'localStorage', message: err.message });
+      localStorage.removeItem('sir-john-shell:theme');
+    }
+  }
+
+  function persistConfig(theme) {
+    const payload = { ...shellConfig, theme: sjsExportTheme(theme), fontFamily: document.documentElement.style.getPropertyValue('--ui-font').trim() };
+    if (theme.ui) payload.ui = theme.ui;
+    fetch('/api/config', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), keepalive: true
+    }).then(() => { shellConfig = payload; }).catch(() => {});
+  }
+
+  function applyTheme(input, source, shouldPersist = true) {
+    const theme = sjsApplyTheme(input);
+    localStorage.setItem('sir-john-shell:theme', JSON.stringify(sjsExportTheme(theme)));
+    if (shouldPersist) persistConfig(theme);
+    loadButton.textContent = 'THEME: ' + (theme.name || 'LOADED').slice(0, 18).toUpperCase();
+    if (schemeSelect) schemeSelect.value = theme.scheme || '';
+    sjsDebugLog('main_theme_applied', { source, name: theme.name, version: SJS_THEME_VERSION });
+  }
+
+  loadButton.addEventListener('click', () => {
+    sjsDebugLog('main_theme_file_picker_open');
+    fileInput.click();
+  });
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) return;
+    sjsDebugLog('main_theme_file_selected', { name: file.name, size: file.size, type: file.type });
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const input = JSON.parse(reader.result);
+        if (input.format && input.format !== SJS_THEME_FORMAT) throw new Error('Unsupported theme format');
+        applyTheme(input, 'file');
+        sjsDebugLog('main_theme_file_loaded', { name: file.name });
+      } catch (err) {
+        sjsDebugLog('main_theme_error', { stage: 'file', name: file.name, message: err.message });
+        logTerminal('err', '[theme] ' + err.message);
+      } finally {
+        fileInput.value = '';
+      }
+    };
+    reader.onerror = () => logTerminal('err', '[theme] cannot read file');
+    reader.readAsText(file);
+  });
+  if (schemeSelect) {
+    schemeSelect.addEventListener('change', () => {
+      if (!schemeSelect.value) return;
+      const preset = sjsThemePreset(schemeSelect.value);
+      try {
+        const savedTheme = JSON.parse(localStorage.getItem('sir-john-shell:theme') || '{}');
+        const current = sjsNormalizeTheme(savedTheme);
+        if (current.ui) preset.ui = current.ui;
+      } catch (_) { /* use the text preset without a UI override */ }
+      applyTheme(preset, 'preset');
+    });
+  }
+
+  fetch('/api/config', { cache: 'no-store' }).then(response => {
+    if (!response.ok) throw new Error('config unavailable');
+    return response.json();
+  }).then(cfg => {
+    shellConfig = cfg || {};
+    if (shellConfig.fontFamily) sjsApplyFont(shellConfig.fontFamily);
+    if (shellConfig.theme || shellConfig.ui) {
+      const configuredTheme = { ...(shellConfig.theme || {}), ui: shellConfig.ui || shellConfig.theme?.ui };
+      applyTheme(configuredTheme, 'config', false);
+    }
+  }).catch(() => {});
+}
+
+function saveUiSnapshot() {
+  const active = document.querySelector('.sw.active');
+  const snapshot = {
+    chat: $('chat-body')?.innerHTML || '',
+    terminal: $('panel-terminal')?.innerHTML || '',
+    thoughts: $('thoughts-body')?.innerHTML || '',
+    workspace: $('ws-file')?.innerHTML || '',
+    prompt: $('prompt')?.value || '',
+    activeView: active?.dataset.view || 'chat'
+  };
+  sessionStorage.setItem('sir-john-shell:ui-snapshot', JSON.stringify(snapshot));
+  sjsDebugLog('main_ui_snapshot_saved', { chatBytes: snapshot.chat.length, terminalBytes: snapshot.terminal.length });
+}
+
+function restoreUiSnapshot() {
+  const raw = sessionStorage.getItem('sir-john-shell:ui-snapshot');
+  if (!raw) return;
+  try {
+    const snapshot = JSON.parse(raw);
+    if ($('chat-body')) $('chat-body').innerHTML = snapshot.chat || '';
+    if ($('panel-terminal')) $('panel-terminal').innerHTML = snapshot.terminal || '';
+    if ($('thoughts-body')) $('thoughts-body').innerHTML = snapshot.thoughts || '';
+    if ($('ws-file')) $('ws-file').innerHTML = snapshot.workspace || '';
+    if ($('prompt')) $('prompt').value = snapshot.prompt || '';
+    if (snapshot.activeView) switchView(snapshot.activeView);
+    sessionStorage.removeItem('sir-john-shell:ui-snapshot');
+    sjsDebugLog('main_ui_snapshot_restored', { chatBytes: (snapshot.chat || '').length });
+  } catch (err) {
+    sessionStorage.removeItem('sir-john-shell:ui-snapshot');
+    sjsDebugLog('main_theme_error', { stage: 'ui_snapshot', message: err.message });
+  }
 }
 
 function initHeaderControls() {
@@ -1091,6 +1173,7 @@ function initResizer() {
    INIT
    ============================================================ */
 function initDemo() {
+  initTheme();
   initSwap();
   initHeaderControls();
   initResizer();
@@ -1100,28 +1183,12 @@ function initDemo() {
   const skills = $('panel-skills');
   if (skills) {
     skills.innerHTML = '';
-    const tabs = document.createElement('div');
-    tabs.className = 'skills-tabs';
-    tabs.innerHTML = '<button class="sk-tab active" data-sk="skills">SKILLS</button>' +
-                     '<button class="sk-tab" data-sk="commands">COMMANDS</button>' +
-                     '<button class="sk-tab" data-sk="config">CONFIG</button>';
-    skills.appendChild(tabs);
-
-    const panels = { skills: 'panel-skills-list', commands: 'panel-commands', config: 'panel-config' };
+    const panels = { skills: 'panel-skills-list', commands: 'panel-commands' };
     Object.keys(panels).forEach(key => {
       const p = document.createElement('div');
       p.id = panels[key];
-      p.className = 'sk-panel' + (key === 'skills' ? ' active' : '');
+      p.className = 'sk-panel';
       skills.appendChild(p);
-    });
-
-    tabs.addEventListener('click', (e) => {
-      if (!e.target.classList.contains('sk-tab')) return;
-      document.querySelectorAll('.sk-tab').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.sk-panel').forEach(p => p.classList.remove('active'));
-      e.target.classList.add('active');
-      const target = $(panels[e.target.dataset.sk]);
-      if (target) target.classList.add('active');
     });
 
     const devinLink = document.createElement('a');
@@ -1131,7 +1198,31 @@ function initDemo() {
     devinLink.textContent = 'Open Devin →';
     skills.appendChild(devinLink);
   }
+  restoreUiSnapshot();
+  initPowerOff();
   connect();
+}
+
+function initPowerOff() {
+  const button = $('power-off');
+  if (!button) return;
+  button.addEventListener('click', () => {
+    if (!socket) return;
+    if (!window.confirm('Shut down this Sir John Shell session?')) return;
+    button.disabled = true;
+    button.textContent = 'POWERING OFF';
+    sjsDebugLog('session_shutdown_requested');
+    socket.send(JSON.stringify({ type: 'shutdown' }));
+  });
+}
+
+const retryButton = $('power-retry');
+if (retryButton) {
+  retryButton.addEventListener('click', () => {
+    powerOffShown = false;
+    $('power-off-screen').hidden = true;
+    connect();
+  });
 }
 
 initDemo();

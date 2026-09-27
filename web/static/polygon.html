@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SIR JOHN SHELL // POLYGON</title>
+<style>
+:root {
+  --ui-bg: #141414;
+  --ui-panel: #101010;
+  --ui-window: #141414;
+  --ui-border: #242424;
+  --ui-green: #9ac16a;
+  --ui-green-dim: #4a5a2f;
+  --ui-cyan: #8be9fd;
+  --ui-yellow: #ffbd2e;
+  --ui-red: #ff5f56;
+  --ui-gray: #888;
+  --ui-dim: #555;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: "Courier New", Courier, monospace;
+  font-size: 14px;
+  background: var(--ui-bg);
+  color: var(--ui-green);
+  display: flex;
+  flex-direction: column;
+}
+
+header {
+  flex: 0 0 auto;
+  height: 42px;
+  background: #141414;
+  border-bottom: 1px solid var(--ui-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+}
+
+header .title {
+  color: #c0c0c0;
+  font-size: 13px;
+  letter-spacing: 2px;
+}
+
+main {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: 420px 1fr;
+  min-height: 0;
+}
+
+.controls {
+  background: var(--ui-panel);
+  border-right: 1px solid var(--ui-border);
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.panel {
+  background: var(--ui-window);
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.panel h2 {
+  font-size: 12px;
+  letter-spacing: 1px;
+  margin-bottom: 12px;
+  color: var(--ui-cyan);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.row label {
+  flex: 0 0 90px;
+  color: #aaa;
+  font-size: 12px;
+}
+
+.row input[type="range"] {
+  flex: 1 1 auto;
+}
+
+.row .value {
+  flex: 0 0 40px;
+  text-align: right;
+  color: var(--ui-green);
+  font-size: 12px;
+}
+
+select, input[type="color"], input[type="number"] {
+  background: #0f0f0f;
+  border: 1px solid var(--ui-border);
+  color: #c0c0c0;
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+select { min-width: 140px; }
+
+input[type="color"] {
+  width: 50px;
+  height: 26px;
+  padding: 2px;
+}
+
+input[type="number"] { width: 60px; }
+
+.bg-card {
+  border: 1px solid #222;
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 12px;
+}
+
+.bg-card h3 {
+  font-size: 11px;
+  color: var(--ui-yellow);
+  margin-bottom: 8px;
+  letter-spacing: 1px;
+}
+
+.bg-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.bg-row label {
+  color: #888;
+  font-size: 11px;
+  min-width: 70px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+button {
+  font-family: inherit;
+  font-size: 12px;
+  letter-spacing: 1px;
+  padding: 8px 14px;
+  border-radius: 5px;
+  cursor: pointer;
+  border: 1px solid var(--ui-border);
+  background: #242424;
+  color: #aaa;
+  transition: .15s;
+}
+
+button:hover {
+  border-color: var(--ui-green-dim);
+  color: var(--ui-green);
+}
+
+button.primary {
+  background: var(--ui-green-dim);
+  color: #0a0a0a;
+  border-color: var(--ui-green);
+}
+
+button.primary:hover {
+  background: var(--ui-green);
+}
+
+.preview-wrap {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.preview-header {
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  background: #141414;
+  border-bottom: 1px solid var(--ui-border);
+  font-size: 12px;
+  color: #888;
+}
+
+#preview {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 16px;
+}
+
+.app-mock {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 10px;
+  max-width: 900px;
+  margin: 0 auto;
+  min-height: 500px;
+}
+
+.col-left, .col-right {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.win {
+  border-radius: 8px;
+  border: 1px solid #2a2a2a;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 140px;
+}
+
+.win-header {
+  background: #242424;
+  border-bottom: 1px solid #2a2a2a;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: #c0c0c0;
+  text-align: center;
+  letter-spacing: 1px;
+}
+
+.win-body {
+  flex: 1 1 auto;
+  padding: 10px;
+  overflow: auto;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.msg {
+  margin-bottom: 10px;
+  padding: 8px;
+  border-radius: 6px;
+  max-width: 90%;
+}
+
+.msg .meta {
+  font-size: 10px;
+  margin-bottom: 4px;
+}
+
+.msg.user { margin-left: auto; border: 1px solid #3a3a3a; }
+.msg.agent { margin-right: auto; }
+
+.chat-body { display: flex; flex-direction: column; gap: 8px; }
+
+.ws-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  height: 100%;
+}
+
+.ws-tree, .ws-file {
+  border-radius: 4px;
+  padding: 6px;
+  font-size: 12px;
+}
+
+.term-line { margin-bottom: 2px; }
+
+.thought {
+  border-left: 2px solid var(--ui-cyan);
+  padding-left: 8px;
+  margin-bottom: 8px;
+}
+
+.export-panel {
+  flex: 0 0 auto;
+  height: 140px;
+  background: var(--ui-panel);
+  border-top: 1px solid var(--ui-border);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.export-panel h2 {
+  font-size: 12px;
+  color: var(--ui-cyan);
+  letter-spacing: 1px;
+}
+
+.export-row {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+#export-out {
+  flex: 1 1 auto;
+  background: #0f0f0f;
+  border: 1px solid var(--ui-border);
+  color: #c0c0c0;
+  border-radius: 4px;
+  padding: 8px;
+  font-family: inherit;
+  font-size: 12px;
+  resize: none;
+}
+
+.export-row button {
+  align-self: flex-start;
+}
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: #333;
+  border-radius: 2px;
+  outline: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  background: var(--ui-green);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  background: var(--ui-green);
+  border-radius: 50%;
+  cursor: pointer;
+  border: none;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <span class="title">SIR JOHN SHELL // POLYGON</span>
+  <div class="actions" style="margin:0;">
+    <select id="scheme-select" title="Color scheme">
+      <option value="">SCHEME: CUSTOM</option>
+      <option value="khaki">SCHEME: KHAKI</option>
+      <option value="monokai">SCHEME: MONOKAI</option>
+      <option value="dracula">SCHEME: DRACULA</option>
+      <option value="nord">SCHEME: NORD</option>
+      <option value="solarized">SCHEME: SOLARIZED</option>
+    </select>
+    <button id="btn-reset">RESET</button>
+    <button id="btn-export" class="primary">EXPORT</button>
+    <button id="btn-apply" class="primary">APPLY</button>
+    <button id="btn-cancel">CANCEL</button>
+  </div>
+</header>
+
+<main>
+  <section class="controls">
+    <div class="panel">
+      <h2>TEXT BRIGHTNESS</h2>
+      <div class="row"><label>User</label><input type="range" id="b-user" min="50" max="200" value="100"><span class="value" id="v-user">100%</span></div>
+      <div class="row"><label>Agent</label><input type="range" id="b-agent" min="50" max="200" value="100"><span class="value" id="v-agent">100%</span></div>
+      <div class="row"><label>Terminal</label><input type="range" id="b-terminal" min="50" max="200" value="100"><span class="value" id="v-terminal">100%</span></div>
+      <div class="row"><label>Thoughts</label><input type="range" id="b-thoughts" min="50" max="200" value="100"><span class="value" id="v-thoughts">100%</span></div>
+      <div class="row"><label>Workspace</label><input type="range" id="b-workspace" min="50" max="200" value="100"><span class="value" id="v-workspace">100%</span></div>
+      <div class="row"><label>Dim / Gray</label><input type="range" id="b-dim" min="50" max="200" value="100"><span class="value" id="v-dim">100%</span></div>
+    </div>
+
+    <div class="panel">
+      <h2>TYPEFACE</h2>
+      <div class="row"><label>Chat / MD Viewer</label><select id="font-select"></select></div>
+    </div>
+
+    <div class="panel">
+      <h2>UI SURFACES</h2>
+      <div id="bg-controls"></div>
+    </div>
+
+    <div class="panel">
+      <h2>CHAT FRAMES</h2>
+      <div id="chat-controls"></div>
+    </div>
+
+    <div class="panel">
+      <h2>EFFECTS</h2>
+      <div class="row" style="justify-content:space-between;">
+        <label style="flex:0 0 auto;">Scanlines overlay</label>
+        <input type="checkbox" id="e-scanlines" style="width:18px;height:18px;accent-color:var(--ui-green);">
+      </div>
+    </div>
+
+  </section>
+
+  <section class="preview-wrap">
+    <div class="preview-header">LIVE PREVIEW — the right side shows how the main UI will look</div>
+    <div id="preview">
+      <div class="app-mock" id="app-mock">
+        <div class="col-left">
+          <div class="win" id="win-chat">
+            <div class="win-header">CHAT</div>
+            <div class="win-body chat-body">
+              <div class="msg user">
+                <div class="meta" style="color:var(--p-user-name);">SIR JOHN SMITH 14:32</div>
+                <span id="preview-user-text">Hello, agent.</span>
+              </div>
+              <div class="msg agent">
+                <div class="meta" style="color:var(--p-agent-name);">AGENT 14:32</div>
+                <span id="preview-agent-text">Ready to assist, Sir.</span>
+              </div>
+              <div class="msg agent">
+                <div class="meta" style="color:var(--p-agent-name);">AGENT 14:32</div>
+                <span id="preview-agent-code">`code` block sample.</span>
+              </div>
+            </div>
+          </div>
+          <div class="win" id="win-terminal">
+            <div class="win-header">TERMINAL</div>
+            <div class="win-body">
+              <div class="term-line t-info" id="preview-terminal-text">[info] connected</div>
+              <div class="term-line t-warn" style="color:var(--p-yellow);">[warn] port 8080 busy</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-right">
+          <div class="win" id="win-workspace">
+            <div class="win-header">WORKSPACE</div>
+            <div class="win-body">
+              <div class="ws-layout">
+                <div class="ws-tree" id="preview-workspace-text">
+                  [D] internal<br>[F] main.go<br>[F] style.css
+                </div>
+                <div class="ws-file" id="preview-ws-file">package main</div>
+              </div>
+            </div>
+          </div>
+          <div class="win" id="win-thoughts">
+            <div class="win-header">THOUGHTS</div>
+            <div class="win-body">
+              <div class="thought" id="preview-thoughts-text">Need to check the config path.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<section class="export-panel">
+  <h2>EXPORT</h2>
+  <div class="export-row">
+    <textarea id="export-out" readonly></textarea>
+    <button id="btn-download">DOWNLOAD JSON</button>
+    <button id="btn-copy">COPY</button>
+  </div>
+</section>
+
+<script src="theme.js"></script>
+<script>
+const BASE = {
+  user: '#9ac16a',
+  agent: '#c0c0c0',
+  terminal: '#a0a0a0',
+  thoughts: '#999999',
+  workspace: '#999999',
+  dim: '#555555',
+  userName: '#ffbd2e',
+  agentName: '#8be9fd',
+  yellow: '#ffbd2e',
+  red: '#ff5f56',
+  green: '#9ac16a'
+};
+
+const DEFAULTS = {
+  name: 'Polygon text theme',
+  scheme: 'khaki',
+  palette: sjsThemePreset('khaki').palette,
+  brightness: { user: 100, agent: 100, terminal: 100, thoughts: 100, workspace: 100, dim: 100 },
+  fontFamily: 'ui-monospace',
+  backgrounds: {
+    global: { type: 'scanlines', c1: '#141414', c2: '#242424', opacity: 0.03 },
+    chat: { type: 'scanlines', c1: '#141414', c2: '#242424', opacity: 0.5 },
+    workspace: { type: 'scanlines', c1: '#141414', c2: '#242424', opacity: 0.5 },
+    thoughts: { type: 'scanlines', c1: '#141414', c2: '#242424', opacity: 0.5 },
+    terminal: { type: 'scanlines', c1: '#141414', c2: '#242424', opacity: 0.5 }
+  },
+  chat: {
+    user: { background: 'transparent', border: '#4a5a2f' },
+    agent: { background: 'transparent', border: '#242424' }
+  },
+  scanlines: false
+};
+
+let state = (() => {
+  try {
+    const saved = localStorage.getItem('sir-john-shell:theme');
+    return saved ? sjsNormalizeTheme(JSON.parse(saved)) : JSON.parse(JSON.stringify(DEFAULTS));
+  } catch (_) {
+    return JSON.parse(JSON.stringify(DEFAULTS));
+  }
+})();
+
+function hexToRgb(hex) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return m ? [parseInt(m[1],16), parseInt(m[2],16), parseInt(m[3],16)] : [0,0,0];
+}
+
+function rgbToHsl(r,g,b) {
+  r/=255; g/=255; b/=255;
+  const max=Math.max(r,g,b), min=Math.min(r,g,b);
+  let h=0,s=0,l=(max+min)/2;
+  if (max!==min) {
+    const d=max-min;
+    s = l > 0.5 ? d/(2-max-min) : d/(max+min);
+    switch(max) {
+      case r: h = (g-b)/d + (g<b ? 6 : 0); break;
+      case g: h = (b-r)/d + 2; break;
+      case b: h = (r-g)/d + 4; break;
+    }
+    h /= 6;
+  }
+  return [h*360, s*100, l*100];
+}
+
+function hslToRgb(h,s,l) {
+  h/=360; s/=100; l/=100;
+  let r,g,b;
+  if (s===0) { r=g=b=l; }
+  else {
+    const hue2rgb = (p,q,t) => {
+      if (t<0) t+=1;
+      if (t>1) t-=1;
+      if (t<1/6) return p+(q-p)*6*t;
+      if (t<1/2) return q;
+      if (t<2/3) return p+(q-p)*(2/3-t)*6;
+      return p;
+    };
+    const q = l < 0.5 ? l*(1+s) : l+s-l*s;
+    const p = 2*l-q;
+    r = hue2rgb(p,q,h+1/3);
+    g = hue2rgb(p,q,h);
+    b = hue2rgb(p,q,h-1/3);
+  }
+  return [Math.round(r*255), Math.round(g*255), Math.round(b*255)];
+}
+
+function rgbToHex(r,g,b) {
+  return '#' + [r,g,b].map(x => x.toString(16).padStart(2,'0')).join('');
+}
+
+function adjustBrightness(hex, pct) {
+  const [r,g,b] = hexToRgb(hex);
+  let [h,s,l] = rgbToHsl(r,g,b);
+  l = Math.min(100, Math.max(5, l * (pct / 100)));
+  return rgbToHex(...hslToRgb(h,s,l));
+}
+
+function makeNoiseData(c1, opacity) {
+  return `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' fill='${encodeURIComponent(c1)}'/%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='${opacity}'/%3E%3C/svg%3E")`;
+}
+
+function buildBg(type, c1, c2, opacity) {
+  switch (type) {
+    case 'none':
+      return `background: transparent; border-color: #2a2a2a;`;
+    case 'mono':
+      return `background: ${c1};`;
+    case 'tg-gradient':
+      return `background: linear-gradient(135deg, ${c1}, ${c2});`;
+    case 'tg-dots':
+      return `background-color: ${c1}; background-image: radial-gradient(circle at 2px 2px, ${c2} 1px, transparent 1px); background-size: 20px 20px;`;
+    case 'scanlines':
+      return `background-color: ${c1}; background-image: repeating-linear-gradient(to bottom, ${c2} 0px, ${c2} 1px, transparent 1px, transparent 3px);`;
+    case 'noise':
+      return `background: ${c1}; background-image: ${makeNoiseData(c2, opacity)}; background-size: 200px 200px;`;
+    default:
+      return `background: ${c1};`;
+  }
+}
+
+function apply() {
+  const root = document.documentElement;
+  const mock = document.getElementById('app-mock');
+  state.fontFamily = sjsApplyFont(state.fontFamily || 'ui-monospace');
+
+  const palette = state.palette || BASE;
+  const b = state.brightness;
+  const pUser = adjustBrightness(palette.userText || BASE.user, b.user);
+  const pAgent = adjustBrightness(palette.agentText || BASE.agent, b.agent);
+  const pTerminal = adjustBrightness(palette.gray || BASE.terminal, b.terminal);
+  const pThoughts = adjustBrightness(palette.gray || BASE.thoughts, b.thoughts);
+  const pWorkspace = adjustBrightness(palette.gray || BASE.workspace, b.workspace);
+  const pDim = adjustBrightness(palette.dim || BASE.dim, b.dim);
+
+  mock.style.setProperty('--p-user-text', pUser);
+  mock.style.setProperty('--p-agent-text', pAgent);
+  mock.style.setProperty('--p-terminal-text', pTerminal);
+  mock.style.setProperty('--p-thoughts-text', pThoughts);
+  mock.style.setProperty('--p-workspace-text', pWorkspace);
+  mock.style.setProperty('--p-dim', pDim);
+  mock.style.setProperty('--p-user-name', palette.userName || BASE.userName);
+  mock.style.setProperty('--p-agent-name', palette.agentName || BASE.agentName);
+  mock.style.setProperty('--p-yellow', palette.yellow || BASE.yellow);
+  mock.style.setProperty('--p-red', palette.red || BASE.red);
+  mock.style.setProperty('--p-green', palette.green || BASE.green);
+
+  const textEls = {
+    user: document.getElementById('preview-user-text'),
+    agent: document.getElementById('preview-agent-text'),
+    terminal: document.getElementById('preview-terminal-text'),
+    thoughts: document.getElementById('preview-thoughts-text'),
+    workspace: document.getElementById('preview-workspace-text'),
+    wsFile: document.getElementById('preview-ws-file')
+  };
+
+  textEls.user.style.color = pUser;
+  textEls.agent.style.color = pAgent;
+  textEls.terminal.style.color = pTerminal;
+  textEls.thoughts.style.color = pThoughts;
+  textEls.workspace.style.color = pWorkspace;
+  textEls.wsFile.style.color = pWorkspace;
+
+  const map = { global: 'app-mock', chat: 'win-chat', workspace: 'win-workspace', thoughts: 'win-thoughts', terminal: 'win-terminal' };
+  for (const key of Object.keys(map)) {
+    const cfg = state.backgrounds[key];
+    const el = document.getElementById(map[key]);
+    if (!el) continue;
+    el.style.cssText = '';
+    for (const part of buildBg(cfg.type, cfg.c1, cfg.c2, cfg.opacity).split(';')) {
+      const [property, value] = part.split(':');
+      if (property && value) el.style.setProperty(property.trim(), value.trim());
+    }
+  }
+  document.querySelector('.msg.user').style.background = state.chat.user.background;
+  document.querySelector('.msg.user').style.borderColor = state.chat.user.border;
+  document.querySelectorAll('.msg.agent').forEach(el => {
+    el.style.background = state.chat.agent.background;
+    el.style.borderColor = state.chat.agent.border;
+  });
+
+}
+
+function renderBgControls() {
+  const container = document.getElementById('bg-controls');
+  const names = { global: 'Global app', chat: 'Chat', workspace: 'Workspace', thoughts: 'Thoughts', terminal: 'Terminal' };
+  const types = ['none', 'mono', 'tg-gradient', 'tg-dots', 'scanlines', 'noise'];
+  container.innerHTML = '';
+  for (const [key, name] of Object.entries(names)) {
+    const cfg = state.backgrounds[key];
+    const card = document.createElement('div');
+    card.className = 'bg-card';
+    card.innerHTML = `<h3>${name.toUpperCase()}</h3>
+      <div class="bg-row"><label>Type</label><select id="t-${key}">${types.map(t => `<option value="${t}" ${cfg.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+      <div class="bg-row"><label>Color 1</label><input type="color" id="c1-${key}" value="${cfg.c1}"><label style="min-width:auto;">Color 2</label><input type="color" id="c2-${key}" value="${cfg.c2}"></div>
+      <div class="bg-row"><label>Intensity</label><input type="range" id="o-${key}" min="0" max="100" value="${Math.round(cfg.opacity * 100)}"><span class="value" id="ov-${key}">${Math.round(cfg.opacity * 100)}%</span></div>`;
+    container.appendChild(card);
+  }
+  container.querySelectorAll('select, input').forEach(el => el.addEventListener('input', onBgChange));
+}
+
+function onBgChange(e) {
+  const [, key] = e.target.id.split('-');
+  const cfg = state.backgrounds[key];
+  if (!cfg) return;
+  cfg.type = document.getElementById(`t-${key}`).value;
+  cfg.c1 = document.getElementById(`c1-${key}`).value;
+  cfg.c2 = document.getElementById(`c2-${key}`).value;
+  cfg.opacity = parseInt(document.getElementById(`o-${key}`).value, 10) / 100;
+  document.getElementById(`ov-${key}`).textContent = Math.round(cfg.opacity * 100) + '%';
+  apply();
+}
+
+function renderChatControls() {
+  const container = document.getElementById('chat-controls');
+  container.innerHTML = '';
+  for (const [key, label] of [['user', 'User message'], ['agent', 'Agent message']]) {
+    const cfg = state.chat[key];
+    const card = document.createElement('div');
+    card.className = 'bg-card';
+    card.innerHTML = `<h3>${label.toUpperCase()}</h3>
+      <div class="bg-row"><label>Background</label><input type="color" id="chat-bg-${key}" value="${cfg.background === 'transparent' ? '#0a0a0a' : cfg.background}"></div>
+      <div class="bg-row"><label>Border</label><input type="color" id="chat-border-${key}" value="${cfg.border}"></div>
+      <div class="bg-row"><label>Transparent</label><input type="checkbox" id="chat-transparent-${key}" ${cfg.background === 'transparent' ? 'checked' : ''}></div>`;
+    container.appendChild(card);
+  }
+  container.querySelectorAll('input').forEach(el => el.addEventListener('input', onChatChange));
+}
+
+function onChatChange(e) {
+  const key = e.target.id.split('-')[2];
+  const cfg = state.chat[key];
+  if (!cfg) return;
+  cfg.background = document.getElementById(`chat-transparent-${key}`).checked ? 'transparent' : document.getElementById(`chat-bg-${key}`).value;
+  cfg.border = document.getElementById(`chat-border-${key}`).value;
+  apply();
+}
+
+function bindBrightness() {
+  for (const key of Object.keys(state.brightness)) {
+    const el = document.getElementById(`b-${key}`);
+    const v = document.getElementById(`v-${key}`);
+    el.addEventListener('input', () => {
+      const val = parseInt(el.value, 10);
+      state.brightness[key] = val;
+      v.textContent = val + '%';
+      apply();
+    });
+  }
+  document.getElementById('e-scanlines').addEventListener('change', (e) => {
+    state.scanlines = e.target.checked;
+    apply();
+  });
+  const fontSelect = document.getElementById('font-select');
+  fontSelect.innerHTML = SJS_FONT_PRESETS.map(font => `<option value='${font.value}'>${font.label}</option>`).join('');
+  fontSelect.addEventListener('change', () => { state.fontFamily = sjsApplyFont(fontSelect.value); apply(); });
+}
+
+function doExport() {
+  const out = JSON.stringify(sjsExportTheme(state, 'Polygon theme'), null, 2);
+  document.getElementById('export-out').value = out;
+  sjsDebugLog('polygon_theme_exported', { bytes: out.length });
+}
+
+function doDownload() {
+  sjsDownloadTheme(state);
+  sjsDebugLog('polygon_theme_downloaded', { name: 'Polygon theme' });
+}
+
+function doApply() {
+  const theme = sjsExportTheme(state, 'Polygon theme');
+  localStorage.setItem('sir-john-shell:theme', JSON.stringify(theme));
+  const payload = { ...shellConfig, theme, ui: theme.ui, fontFamily: state.fontFamily };
+  fetch('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), keepalive: true }).catch(() => {});
+  sjsDebugLog('polygon_theme_applied', { name: theme.name, version: theme.version });
+  location.href = '/?theme=applied&dev=1';
+}
+
+function doCancel() {
+  sjsDebugLog('polygon_theme_cancelled');
+  location.href = '/?theme=cancelled&dev=1';
+}
+
+function doReset() {
+  state = JSON.parse(JSON.stringify(DEFAULTS));
+  init();
+  apply();
+  doExport();
+}
+
+function doCopy() {
+  const ta = document.getElementById('export-out');
+  ta.select();
+  document.execCommand('copy');
+  const btn = document.getElementById('btn-copy');
+  const old = btn.textContent;
+  btn.textContent = 'COPIED';
+  setTimeout(() => btn.textContent = old, 1200);
+}
+
+function init() {
+  for (const key of Object.keys(state.brightness)) {
+    document.getElementById(`b-${key}`).value = state.brightness[key];
+    document.getElementById(`v-${key}`).textContent = state.brightness[key] + '%';
+  }
+  document.getElementById('font-select').value = state.fontFamily || 'ui-monospace';
+  renderBgControls();
+  renderChatControls();
+  document.getElementById('e-scanlines').checked = state.scanlines;
+  document.getElementById('scheme-select').value = state.scheme || '';
+}
+
+document.getElementById('btn-export').addEventListener('click', doExport);
+document.getElementById('btn-download').addEventListener('click', doDownload);
+document.getElementById('btn-apply').addEventListener('click', doApply);
+document.getElementById('btn-cancel').addEventListener('click', doCancel);
+document.getElementById('scheme-select').addEventListener('change', (e) => {
+  if (!e.target.value) return;
+  const ui = { backgrounds: state.backgrounds, chat: state.chat, scanlines: state.scanlines };
+  state = Object.assign(sjsThemePreset(e.target.value), ui, { fontFamily: state.fontFamily });
+  init();
+  apply();
+  doExport();
+});
+document.getElementById('btn-reset').addEventListener('click', doReset);
+document.getElementById('btn-copy').addEventListener('click', doCopy);
+
+bindBrightness();
+init();
+apply();
+doExport();
+sjsDebugLog('polygon_ready', { version: SJS_THEME_VERSION });
+
+let shellConfig = {};
+fetch('/api/config', { cache: 'no-store' }).then(response => response.ok ? response.json() : {}).then(cfg => {
+  shellConfig = cfg || {};
+  const configured = shellConfig.theme || shellConfig.ui;
+  if (configured) state = sjsNormalizeTheme({ ...(shellConfig.theme || {}), ui: shellConfig.ui || shellConfig.theme?.ui });
+  if (shellConfig.fontFamily) state.fontFamily = shellConfig.fontFamily;
+  init();
+  apply();
+  doExport();
+}).catch(() => {});
+</script>
+
+</body>
+</html>
